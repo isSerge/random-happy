@@ -6,4 +6,5 @@ deploy-drand:
 deploy-sequencer:
 	forge script script/DeploySequencerRandomOracle.s.sol --rpc-url $(RPC_URL) --broadcast --private-key $(PRIVATE_KEY)
 
-deploy-all: deploy-drand deploy-sequencer
+deploy-all: 
+	forge script script/DeployRandomnessOracle.s.sol --rpc-url $(RPC_URL) --broadcast --private-key $(PRIVATE_KEY)
