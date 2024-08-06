@@ -8,7 +8,7 @@ contract DeploySequencerRandomOracle is Script {
     uint256 timeout = 10;
     uint256 precommitDelay = 10;
 
-    function run() external {
+    function run() external returns (SequencerRandomOracle) {
         vm.startBroadcast();
 
         SequencerRandomOracle sequencerOracle = new SequencerRandomOracle(timeout, precommitDelay);
@@ -16,5 +16,7 @@ contract DeploySequencerRandomOracle is Script {
         console.log("SequencerRandomOracle deployed at:", address(sequencerOracle));
 
         vm.stopBroadcast();
+
+        return sequencerOracle;
     }
 }

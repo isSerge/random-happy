@@ -7,7 +7,7 @@ import "../src/DrandOracle.sol";
 contract DeployDrandOracle is Script {
     uint256 timeout = 10;
 
-    function run() external {
+    function run() external returns (DrandOracle) {
         vm.startBroadcast();
 
         DrandOracle drandOracle = new DrandOracle(timeout);
@@ -15,5 +15,7 @@ contract DeployDrandOracle is Script {
         console.log("DrandOracle deployed at:", address(drandOracle));
 
         vm.stopBroadcast();
+
+        return drandOracle;
     }
 }

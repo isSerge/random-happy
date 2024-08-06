@@ -43,11 +43,6 @@ contract SequencerRandomOracleTest is Test {
         uint256 T = block.timestamp - timeout - 1;
         bool available = sequencerOracle.willBeAvailable(T);
 
-        // Debug information
-        console.log("T:", T);
-        console.log("block.timestamp:", block.timestamp);
-        console.log("available:", available);
-
         assertFalse(available);
     }
 
