@@ -1,66 +1,73 @@
-## Foundry
+# Randomness Oracle Contracts
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+This repository contains smart contracts for a randomness oracle system,
+including `DrandOracle`, `SequencerRandomOracle`, and `RandomnessOracle`. The
+contracts are developed and tested using Foundry.
 
-Foundry consists of:
+## Contracts Overview
 
--   **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
--   **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
--   **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
--   **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+- **DrandOracle**: Fetches and stores randomness values from the Drand network.
+- **SequencerRandomOracle**: Manages commitments and reveals to produce
+  randomness.
+- **RandomnessOracle**: Combines randomness from `DrandOracle` and
+  `SequencerRandomOracle` to provide a final randomness value.
 
-## Documentation
+## Prerequisites
 
-https://book.getfoundry.sh/
+- [Foundry](https://book.getfoundry.sh/getting-started/installation.html)
+  installed
+- A running Ethereum node (e.g., [Anvil](https://book.getfoundry.sh/anvil/))
 
-## Usage
+## Setup
 
-### Build
+### Install Dependencies
 
 ```shell
-$ forge build
+forge install
 ```
 
-### Test
+### Build Contracts
 
 ```shell
-$ forge test
+forge build
 ```
 
-### Format
+### Test Contracts
 
 ```shell
-$ forge fmt
+forge test
 ```
 
-### Gas Snapshots
+## Deployment
 
-```shell
-$ forge snapshot
+### Environment Variables
+
+Create a `.env` file in the root directory and add the following environment
+variables:
+
+```
+RPC_URL=<your_rpc_url>
+PRIVATE_KEY=<your_private_key>
 ```
 
-### Anvil
+## Deploying Contracts
+
+Make sure you have Anvil started (in separate terminal tab):
 
 ```shell
-$ anvil
+anvil
 ```
 
-### Deploy
+In order to deploy all three contracts together run:
 
 ```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
+make deploy-all
 ```
 
-### Cast
+Also, `DrandOracle` and `SequencerRandomOracle` contracts each can be deployed
+separately:
 
 ```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
+make deploy-drand
+make deploy-sequencer
 ```
