@@ -1,7 +1,8 @@
 import { logger } from './logger';
+import { config } from './config';
 
 export function main() {
-  logger.info('Hello World');
+  logger.info(config);
 }
 
 main();
