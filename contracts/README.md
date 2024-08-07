@@ -52,10 +52,11 @@ PRIVATE_KEY=<your_private_key>
 
 ## Deploying Contracts
 
-Make sure you have Anvil started (in separate terminal tab):
+Make sure you have Anvil started with 2 seconds block time (in separate terminal
+tab):
 
 ```shell
-anvil
+anvil --block-time 2
 ```
 
 In order to deploy all three contracts together run:
