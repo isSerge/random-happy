@@ -1,4 +1,6 @@
-export interface Transaction {
-  to: `0x${string}`;
-  data: `0x${string}`;
+export interface TransactionData {
+  address: `0x${string}`,
+  abi: any,
+  functionName: string,
+  args: any[],
 }

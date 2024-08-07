@@ -4,7 +4,7 @@ import { privateKeyToAccount, nonceManager } from 'viem/accounts'
 
 import { config } from './config';
 import { logger } from './logger';
-import { createDrandSubmissionTx } from './oracles/drandOracle';
+import { createDrandTxData } from './oracles/drandOracle';
 import { fetchDrandRandomness } from './drand';
 import { TransactionManager } from './transaction';
 
@@ -34,8 +34,9 @@ export async function main() {
   // 1. Create transaction to submit the beacon to the drand oracle
   // 2. Process transaction with the transaction manager
   for await (const beacon of drandIterator) {
-    const drandSubmissionTx = createDrandSubmissionTx(beacon);
+    const drandSubmissionTx = await createDrandTxData(client, beacon);
 
+    // TODO: should enqueue transactions and process them in order
     await txManager.processTransaction(drandSubmissionTx);
   }
 }
