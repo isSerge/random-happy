@@ -7,69 +7,75 @@ interface TransactionManagerParams {
   client: PublicClient & WalletClient;
   txTimeout?: number;
   txInterval?: number;
-  txRequiredConfirmations?: number;
 }
 
 export class TransactionManager {
   private account: PrivateKeyAccount;
   private client: PublicClient & WalletClient;
-  // TODO: add queue
-  // private queue: any[];
-  // private txTimeout: number;
-  // private txInterval: number;
-  // private txRequiredConfirmations: number;
 
   constructor(params: TransactionManagerParams) {
     this.account = params.account;
     this.client = params.client;
-    // this.txInterval = params.txInterval || 1000;
-    // this.txTimeout = params.txTimeout || 60000;
-    // this.txRequiredConfirmations = params.txRequiredConfirmations || 1;
-    // this.queue = [];
   }
 
-  // TODO: add gas estimation
+  private async estimateGasWithFallback(__tx: TransactionData) {
+    const defaultGasLimit = BigInt(1000000);
+
+    // TODO: this breaks, investigate why
+    // try {
+    //   // Estimate gas
+    //   const gasEstimate = await this.client.estimateGas({
+    //     ...tx,
+    //     account: this.account,
+    //   });
+
+    //   // Add a buffer to the gas estimate
+    //   const gasLimit = gasEstimate + BigInt(Math.floor(Number(gasEstimate) * 0.1)); // 10% buffer
+
+    //   logger.info(`Estimated gas: ${gasEstimate}, Gas limit with buffer: ${gasLimit}, Default gas limit: ${defaultGasLimit}`);
+
+    //   return gasLimit;
+    // } catch (error) {
+    //   if (error instanceof Error) {
+    //     logger.error(`Failed to estimate gas: ${error.message}`);
+    //   } else {
+    //     logger.error(`Failed to estimate gas: ${String(error)}`);
+    //   }
+    //   return defaultGasLimit;
+    // }
+
+    return defaultGasLimit;
+  }
+
   public async processTransaction(tx: TransactionData) {
     logger.info(`Processing transaction: ${tx.functionName} on contract: ${tx.address}`);
 
-    // TODO: this causes nonce or timeout issues
-    // // Estimate gas
-    // const gasEstimate = await this.client.estimateGas({
-    //   ...tx,
-    //   account: this.account,
-    // });
+    const gasLimit = await this.estimateGasWithFallback(tx);
 
-    // // Add a buffer to the gas estimate
-    // const gas = gasEstimate + BigInt(Math.floor(Number(gasEstimate) * 0.1)); // 10% buffer
+    // Get current gas price
+    const currentGasPrice = await this.client.getGasPrice();
 
-    // logger.info(`Estimated gas: ${gasEstimate}, Gas limit with buffer: ${gas}`);
+    // Add a buffer to the gas price
+    const gasPrice = currentGasPrice + BigInt(Math.floor(Number(currentGasPrice) * 0.1)); // 10% buffer
 
-    // // Get current gas price
-    // const currentGasPrice = await this.client.getGasPrice();
+    logger.info(`Current gas price: ${currentGasPrice}, Gas price with buffer: ${gasPrice}`);
 
-    // // Add a buffer to the gas price
-    // const gasPrice = currentGasPrice + BigInt(Math.floor(Number(currentGasPrice) * 0.1)); // 10% buffer
-
-    // logger.info(`Current gas price: ${currentGasPrice}, Gas price with buffer: ${gasPrice}`);
-
-    // TODO: handle simulation errors
-    // simulate transaction
+    // Simulate transaction
     const { request } = await this.client.simulateContract({
       ...tx,
       account: this.account,
-      chain: this.client.chain
+      chain: this.client.chain,
+      gas: gasLimit,
+      gasPrice,
     });
 
-    // submit transaction
+    // Submit transaction
     const txHash = await this.client.writeContract(request);
 
     logger.info(`Transaction sent: ${txHash}`);
 
     const receipt = await this.client.waitForTransactionReceipt({
       hash: txHash,
-      onReplaced: () => {
-        logger.error(`Transaction replaced: ${txHash}`);
-      },
     });
 
     logger.info(`Transaction status: ${receipt.status}`);
