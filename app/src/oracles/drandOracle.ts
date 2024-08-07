@@ -23,11 +23,23 @@ export async function createDrandTxData(client: PublicClient, beacon: Randomness
 
   logger.info(`Creating drand randomness transaction: 0x${randomness} at timestamp: ${blockTimestamp}`);
 
-  // TODO: include deadline
+  // Fetch the timeout value from the contract
+  const timeout = await client.readContract({
+    address: config.DRAND_ORACLE_ADDRESS as `0x${string}`,
+    abi,
+    functionName: 'getTimeout',
+  });
+
+  const timeoutBigInt = BigInt(timeout as string | number);
+
+  // Calculate the deadline
+  const deadline = blockTimestamp + timeoutBigInt;
+
   return {
     address: config.DRAND_ORACLE_ADDRESS as `0x${string}`,
     abi,
     functionName: 'setValue',
     args: [blockTimestamp, `0x${beacon.randomness}`],
+    deadline,
   };
 }
