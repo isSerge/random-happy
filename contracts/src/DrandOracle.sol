@@ -7,6 +7,9 @@ contract DrandOracle {
     // Mapping from timestamp T to Drand value
     mapping(uint256 => bytes32) public values;
 
+    // Event for logging value submission
+    event ValueSet(uint256 indexed timestamp, bytes32 value);
+
     // Constructor to set the timeout value
     constructor(uint256 _timeout) {
         timeout = _timeout;
@@ -22,6 +25,7 @@ contract DrandOracle {
         require(T <= block.timestamp, "Timestamp is in the future");
         require(block.timestamp <= T + timeout, "Drand value expired");
         values[T] = value;
+        emit ValueSet(T, value);
     }
 
     // Function to get the Drand value for a specific timestamp T

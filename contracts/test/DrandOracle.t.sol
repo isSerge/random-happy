@@ -6,6 +6,8 @@ import "forge-std/Test.sol";
 import "../src/DrandOracle.sol";
 
 contract DrandOracleTest is Test {
+    event ValueSet(uint256 indexed timestamp, bytes32 value);
+
     DrandOracle drandOracle;
     uint256 timeout = 10;
     uint256 initialTimestamp = 100;
@@ -27,6 +29,14 @@ contract DrandOracleTest is Test {
         drandOracle.setValue(T, value);
 
         assertEq(drandOracle.getValue(T), value);
+    }
+
+    function testEmitsEventOnValueSet() public warpTimestamp {
+        uint256 T = block.timestamp - 1;
+        bytes32 value = keccak256("test");
+        vm.expectEmit(true, true, false, true);
+        emit ValueSet(T, value);
+        drandOracle.setValue(T, value);
     }
 
     function testWillBeAvailable() public warpTimestamp {
