@@ -37,9 +37,9 @@ export async function main() {
   // 1. Create transaction to submit the beacon to the drand oracle
   // 2. Process transaction with the transaction manager
   for await (const beacon of drandIterator) {
-    const drandSubmissionTx = await createDrandTxData(client, beacon);
+    const drandTxData = await createDrandTxData(client, beacon);
 
-    await txManager.addTransaction(drandSubmissionTx);
+    await txManager.addTransaction(drandTxData);
   }
 }
 

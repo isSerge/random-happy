@@ -63,6 +63,14 @@ export class TransactionManager {
     this.processQueue();
   }
 
+  public async addTransaction({ txData, deadline }: { txData: TransactionData; deadline: bigint }) {
+    await this.queueMutex.runExclusive(() => {
+      this.queue.push({ txData, deadline, retries: 0 });
+      logger.info(`TransactionManager.addTransaction: Transaction added to queue: ${txData.functionName}, deadline: ${deadline} `);
+      logger.info(`TransactionManager.addTransaction: Queue length: ${this.queue.length}`);
+    });
+  }
+
   private async getCurrentBlockTimestamp(): Promise<bigint> {
     const block = await this.client.getBlock();
     return BigInt(block.timestamp);
@@ -118,8 +126,7 @@ export class TransactionManager {
             });
 
             if (receipt.status === 'reverted') {
-              logger.error(`TransactionManager.processQueue: Transaction ${txData.functionName} with ${deadline} deadline reverted`);
-              // TODO: handle specific revert reasons
+              await this.handleTxRevert(receipt.transactionHash);
             } else {
               logger.info(`TransactionManager.processQueue: Transaction ${txData.functionName} with ${deadline} deadline succeeded`);
               // Remove transaction from tracked transactions
@@ -128,13 +135,7 @@ export class TransactionManager {
               });
             }
           } catch (error) {
-            if (error instanceof Error) {
-              logger.error(`TransactionManager.processQueue: Failed to process transaction: ${error.message}`);
-            } else {
-              logger.error(`TransactionManager.processQueue: Failed to process transaction: ${String(error)}`);
-            }
-
-            // TODO: handle specific errors
+            await this.handleTxError(error);
 
             // Retry logic
             if (retries < this.maxRetries) {
@@ -151,6 +152,20 @@ export class TransactionManager {
 
       await new Promise((resolve) => setTimeout(resolve, this.queueInterval));
     }
+  }
+
+  // TODO: handle specific transaction errors
+  private async handleTxError(error: unknown) {
+    if (error instanceof Error) {
+      logger.error(`TransactionManager.handleTxError: Failed to process transaction: ${error.message}`);
+    } else {
+      logger.error(`TransactionManager.handleTxError: Failed to process transaction: ${String(error)}`);
+    }
+  }
+
+  // TODO: handle specific revert reasons
+  private async handleTxRevert(txHash: `0x${string}`) {
+    logger.error(`TransactionManager.handleTxRevert: Transaction ${txHash} reverted`);
   }
 
   private async estimateGasWithFallback(__tx: TransactionData) {
@@ -234,14 +249,6 @@ export class TransactionManager {
       trackedTxData,
       receipt,
     };
-  }
-
-  public async addTransaction({ txData, deadline }: { txData: TransactionData; deadline: bigint }) {
-    await this.queueMutex.runExclusive(() => {
-      this.queue.push({ txData, deadline, retries: 0 });
-      logger.info(`TransactionManager.addTransaction: Transaction added to queue: ${txData.functionName}, deadline: ${deadline} `);
-      logger.info(`TransactionManager.addTransaction: Queue length: ${this.queue.length}`);
-    });
   }
 
   // TODO: implement monitoring of pending transactions and speed up transactions with low gas price
