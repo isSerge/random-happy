@@ -13,12 +13,12 @@ export async function* fetchDrandRandomness(abortController: AbortController) {
 
   // Fetch the latest randomness
   const latestBeacon = await fetchBeacon(drandClient);
-  logger.info(`Fetched randomness: ${latestBeacon.randomness} for round: ${latestBeacon.round}`);
+  logger.info(`Drand service: Fetched randomness: ${latestBeacon.randomness} for round: ${latestBeacon.round}`);
   yield latestBeacon;
 
   // Watch for new randomness beacons
   for await (const beacon of watch(drandClient, abortController)) {
-    logger.info(`Fetched randomness: ${beacon.randomness} for round: ${beacon.round}`);
+    logger.info(`Drand service: Fetched randomness: ${beacon.randomness} for round: ${beacon.round}`);
     yield beacon;
   }
 }

@@ -13,7 +13,7 @@ interface TransactionManagerParams {
 }
 
 interface QueuedTransaction {
-  tx: TransactionData;
+  txData: TransactionData;
   deadline: bigint;
   retries: number;
 }
@@ -52,7 +52,7 @@ export class TransactionManager {
     const { default: TinyQueue } = await import('tinyqueue');
     this.queue = new TinyQueue<QueuedTransaction>([], (a, b) => Number(a.deadline - b.deadline));
 
-    logger.info('Transaction manager initialized');
+    logger.info('TransactionManager: initialized');
 
     this.processQueue();
   }
@@ -65,20 +65,20 @@ export class TransactionManager {
   private async processQueue() {
     while (true) {
       if (this.queue.length === 0) {
-        logger.info('Queue is empty, waiting for transactions to be added');
+        logger.info('TransactionManager: Queue is empty, waiting for transactions to be added');
         await new Promise((resolve) => setTimeout(resolve, this.queueInterval)); // Wait before checking the queue again
         continue;
       }
 
-      logger.info(`Processing queue with ${this.queue.length} transactions`);
+      logger.info(`TransactionManager: Processing queue with ${this.queue.length} transactions`);
 
       const currentBlockTimestamp = await this.getCurrentBlockTimestamp();
 
       // Remove expired transactions
       await this.queueMutex.runExclusive(() => {
         while (this.queue.length > 0 && this.queue.peek().deadline <= currentBlockTimestamp) {
-          const { tx } = this.queue.pop();
-          logger.warn(`Discarding transaction ${tx.functionName} - deadline passed: ${tx.deadline}`);
+          const { txData } = this.queue.pop();
+          logger.warn(`TransactionManager: Discarding transaction ${txData.functionName} - deadline passed: ${txData.deadline}`);
         }
       });
 
@@ -95,38 +95,38 @@ export class TransactionManager {
 
       // 3. Iterate over the batch and process each transaction
       await Promise.allSettled(
-        transactionsToProcess.map(async ({ tx, deadline, retries }) => {
+        transactionsToProcess.map(async ({ txData, deadline, retries }) => {
           try {
-            const { receipt, trackedTxData } = await this.submitTransaction(tx);
+            const { receipt, trackedTxData } = await this.submitTransaction(txData);
 
             // Add transaction to tracked transactions
             this.trackedTransactions.set(trackedTxData.txHash, { ...trackedTxData, deadline, retries });
 
             if (receipt.status === 'reverted') {
-              logger.error(`Transaction ${tx.functionName} with ${deadline} deadline reverted`);
+              logger.error(`TransactionManager: Transaction ${txData.functionName} with ${deadline} deadline reverted`);
               // TODO: handle specific revert reasons
             } else {
-              logger.info(`Transaction ${tx.functionName} with ${deadline} deadline succeeded`);
+              logger.info(`TransactionManager: Transaction ${txData.functionName} with ${deadline} deadline succeeded`);
               // Remove transaction from tracked transactions
-              this.trackedTransactions.delete(tx.functionName);
+              this.trackedTransactions.delete(txData.functionName);
             }
           } catch (error) {
             if (error instanceof Error) {
-              logger.error(`Failed to process transaction: ${error.message}`);
+              logger.error(`TransactionManager: Failed to process transaction: ${error.message}`);
             } else {
-              logger.error(`Failed to process transaction: ${String(error)}`);
+              logger.error(`TransactionManager: Failed to process transaction: ${String(error)}`);
             }
 
             // TODO: handle specific errors
 
             // Retry logic
             if (retries < this.maxRetries) {
-              logger.info(`Retrying ${tx.functionName} transaction with deadline: ${deadline}`);
+              logger.info(`TransactionManager: Retrying ${txData.functionName} transaction with deadline: ${deadline}`);
               await this.queueMutex.runExclusive(() => {
-                this.queue.push({ tx, deadline, retries: retries + 1 });
+                this.queue.push({ txData, deadline, retries: retries + 1 });
               });
             } else {
-              logger.warn(`Discarding ${tx.functionName} transaction with ${deadline} deadline - max retries reached: ${this.maxRetries}`);
+              logger.warn(`TransactionManager: Discarding ${txData.functionName} transaction with ${deadline} deadline - max retries reached: ${this.maxRetries}`);
             }
           }
         })
@@ -165,10 +165,10 @@ export class TransactionManager {
     return defaultGasLimit;
   }
 
-  private async submitTransaction(tx: TransactionData) {
-    logger.info(`Processing transaction: ${tx.functionName} on contract: ${tx.address} `);
+  private async submitTransaction(txData: TransactionData) {
+    logger.info(`TransactionManager: Processing transaction: ${txData.functionName} on contract: ${txData.address} `);
 
-    const gasLimit = await this.estimateGasWithFallback(tx);
+    const gasLimit = await this.estimateGasWithFallback(txData);
 
     // Get current gas price
     const currentGasPrice = await this.client.getGasPrice();
@@ -176,12 +176,12 @@ export class TransactionManager {
     // Add a buffer to the gas price
     const gasPrice = currentGasPrice + BigInt(Math.floor(Number(currentGasPrice) * 0.1)); // 10% buffer
 
-    logger.info(`Current gas price: ${currentGasPrice}, Gas price with buffer: ${gasPrice} `);
+    logger.info(`TransactionManager: Current gas price: ${currentGasPrice}, Gas price with buffer: ${gasPrice} `);
 
     // TODO: consider adding condition to check if simulation is enabled or necessary
     // Simulate transaction
     const { request } = await this.client.simulateContract({
-      ...tx,
+      ...txData,
       account: this.account,
       chain: this.client.chain,
       gas: gasLimit,
@@ -199,7 +199,7 @@ export class TransactionManager {
     // Submit transaction
     const txHash = await this.client.writeContract(request);
 
-    logger.info(`Transaction sent: ${txHash} `);
+    logger.info(`TransactionManager: Transaction sent: ${txHash} `);
 
     const receipt = await this.client.waitForTransactionReceipt({
       hash: txHash,
@@ -208,7 +208,7 @@ export class TransactionManager {
     // Transaction details that will be included in the tracked transactions map
     const trackedTxData = {
       txHash,
-      tx,
+      txData,
       nonce: BigInt(nonce || 0),
       gasPrice,
     }
@@ -222,8 +222,32 @@ export class TransactionManager {
   public async addTransaction({ txData, deadline }: { txData: TransactionData; deadline: bigint }) {
     await this.queueMutex.runExclusive(() => {
       this.queue.push({ txData, deadline, retries: 0 });
-      logger.info(`Transaction added to queue: ${txData.functionName}, deadline: ${deadline} `);
-      logger.info(`Queue length: ${this.queue.length}`);
+      logger.info(`TransactionManager: Transaction added to queue: ${txData.functionName}, deadline: ${deadline} `);
+      logger.info(`TransactionManager: Queue length: ${this.queue.length}`);
+    });
+  }
+
+  // TODO: implement monitoring of pending transactions and speed up transactions with low gas price
+  // @ts-ignore: TS6133
+  private async speedUpTransaction(txHash: `0x${string}`) {
+    const trackedTx = this.trackedTransactions.get(txHash);
+    if (!trackedTx) {
+      logger.warn(`TransactionManager: Transaction with hash ${txHash} not found`);
+      return;
+    }
+
+    logger.info(`TransactionManager: Speeding up transaction with hash: ${txHash} by increasing gas price`);
+
+    const originalGasPrice = trackedTx.gasPrice ? trackedTx.gasPrice : await this.client.getGasPrice();
+    const newGasPrice = originalGasPrice + BigInt(Math.floor(Number(originalGasPrice) * 0.1)); // 10% increase
+
+    await this.queueMutex.runExclusive(() => {
+      this.queue.push({
+        txData: trackedTx.txData,
+        deadline: trackedTx.deadline,
+        retries: trackedTx.retries + 1,
+        gasPrice: newGasPrice,
+      });
     });
   }
 }
