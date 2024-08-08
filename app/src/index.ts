@@ -1,12 +1,21 @@
-import { createTestClient, http, publicActions, walletActions } from 'viem';
+import { createTestClient, http, publicActions, walletActions, keccak256 } from 'viem';
 import { foundry } from 'viem/chains';
-import { privateKeyToAccount, nonceManager } from 'viem/accounts'
+import { privateKeyToAccount, nonceManager } from 'viem/accounts';
+import { toHex } from 'viem/utils';
+import { createHash } from 'crypto';
 
 import { config } from './config';
 import { logger } from './logger';
 import { createDrandTxData } from './oracles/drandOracle';
+import { createSequencerTxData } from './oracles/sequencerOracle';
 import { fetchDrandRandomness } from './drand';
 import { TransactionManager } from './transaction';
+
+const SEQUENCER_COMMITMENT_INTERVAL = 2000; // in milliseconds
+
+function generateRandomValue(): bigint {
+  return BigInt('0x' + createHash('sha256').update(Math.random().toString()).digest('hex'));
+}
 
 export async function main() {
   // Create account with nonce manager to automatically handle nonces for transactions
@@ -29,18 +38,37 @@ export async function main() {
   // Initialize the transaction manager, which will start processing the queue
   await txManager.initialize();
 
-  // Start fetching randomness from drand
-  const abortController = new AbortController();
-  const drandIterator = fetchDrandRandomness(abortController);
+  // Function to handle drand randomness
+  const handleDrandRandomness = async () => {
+    // Start fetching randomness from drand
+    const abortController = new AbortController();
+    const drandIterator = fetchDrandRandomness(abortController);
 
-  // Process each beacon:
-  // 1. Create transaction to submit the beacon to the drand oracle
-  // 2. Process transaction with the transaction manager
-  for await (const beacon of drandIterator) {
-    const drandTxData = await createDrandTxData(client, beacon);
+    for await (const beacon of drandIterator) {
+      const drandTxData = await createDrandTxData(client, beacon);
+      await txManager.addTransaction(drandTxData);
+    }
+  };
 
-    await txManager.addTransaction(drandTxData);
-  }
+  // Function to handle sequencer commitments
+  const handleSequencerCommitments = async () => {
+    while (true) {
+      const sequencerRandomValue = generateRandomValue();
+      const commitment = keccak256(toHex(sequencerRandomValue));
+      const sequencerTxData = await createSequencerTxData(client, commitment);
+
+      await txManager.addTransaction(sequencerTxData);
+
+      // Wait for 2 seconds before generating the next commitment
+      await new Promise((resolve) => setTimeout(resolve, SEQUENCER_COMMITMENT_INTERVAL));
+    }
+  };
+
+  // Start handling drand randomness and sequencer commitments concurrently
+  await Promise.all([
+    handleDrandRandomness(),
+    handleSequencerCommitments(),
+  ]);
 }
 
 main().catch((error) => {

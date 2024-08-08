@@ -5,7 +5,7 @@ import { config } from '../config';
 import { logger } from '../logger';
 import { TransactionData } from '../types';
 
-import abi from './drandOracleAbi.json';;
+import abi from './drandOracleAbi.json';
 
 export async function createDrandTxData(client: PublicClient, beacon: RandomnessBeacon) {
   const block = await client.getBlock();
