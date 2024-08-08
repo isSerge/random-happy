@@ -10,6 +10,7 @@ interface TransactionManagerParams {
   queueInterval?: number;
   maxRetries?: number;
   batchSize?: number;
+  monitorPendingTxsInterval?: number;
 }
 
 interface QueuedTransaction {
@@ -33,10 +34,11 @@ export class TransactionManager {
   private maxRetries: number;
   private queueMutex: Mutex;
   private batchSize: number;
-  private trackedTransactions: Map<string, TrackedTransaction>;
+  private trackedTransactions: Map<`0x${string}`, TrackedTransaction>;
   private trackedTransactionsMutex: Mutex;
-  private removalSet: Set<string>; // Set of transactions to remove from the queue
+  private removalSet: Set<`0x${string}`>; // Set of transactions to remove from the queue
   private removalSetMutex: Mutex;
+  private monitorPendingTxsInterval: number;
 
   constructor(params: TransactionManagerParams) {
     this.account = params.account;
@@ -47,10 +49,11 @@ export class TransactionManager {
     this.queueMutex = new Mutex();
     // TODO: adjust batch size to rate limit
     this.batchSize = params.batchSize || 5;
-    this.trackedTransactions = new Map<string, TrackedTransaction>();
+    this.trackedTransactions = new Map<`0x${string}`, TrackedTransaction>();
     this.trackedTransactionsMutex = new Mutex();
     this.removalSet = new Set<`0x${string}`>();
     this.removalSetMutex = new Mutex();
+    this.monitorPendingTxsInterval = params.monitorPendingTxsInterval || 1000;
   }
 
   public async initialize() {
@@ -61,6 +64,7 @@ export class TransactionManager {
     logger.info('TransactionManager: initialized');
 
     this.processQueue();
+    this.monitorPendingTxs();
   }
 
   public async addTransaction({ txData, deadline }: { txData: TransactionData; deadline: bigint }) {
@@ -105,11 +109,11 @@ export class TransactionManager {
         while (this.queue.length > 0 && transactionsToProcess.length < this.batchSize) {
           const nextTx = this.queue.pop();
 
-          if (!this.removalSet.has(nextTx.tx.hash)) {
+          if (!this.removalSet.has(nextTx.txData.hash)) {
             transactionsToProcess.push(nextTx);
           } else {
-            this.removalSet.delete(nextTx.tx.hash);
-            logger.info(`TransactionManager.processQueue: Skipping removed transaction: ${nextTx.tx.hash}`);
+            this.removalSet.delete(nextTx.txData.hash);
+            logger.info(`TransactionManager.processQueue: Skipping removed transaction: ${nextTx.txData.hash}`);
           }
         }
       });
@@ -131,7 +135,7 @@ export class TransactionManager {
               logger.info(`TransactionManager.processQueue: Transaction ${txData.functionName} with ${deadline} deadline succeeded`);
               // Remove transaction from tracked transactions
               await this.trackedTransactionsMutex.runExclusive(() => {
-                this.trackedTransactions.delete(txData.functionName);
+                this.trackedTransactions.delete(receipt.transactionHash);
               });
             }
           } catch (error) {
@@ -251,8 +255,6 @@ export class TransactionManager {
     };
   }
 
-  // TODO: implement monitoring of pending transactions and speed up transactions with low gas price
-  // @ts-ignore: TS6133
   private async speedUpTransaction(txHash: `0x${string}`) {
     await this.trackedTransactionsMutex.runExclusive(async () => {
       const trackedTx = this.trackedTransactions.get(txHash);
@@ -277,8 +279,7 @@ export class TransactionManager {
     });
   }
 
-  // TODO: implement monitoring of pending transactions and drop transactions when necessary
-  // @ts-ignore: TS6133
+  // TODO: should replace the transaction with a new one with higher gas price
   private async dropTransaction(txHash: `0x${string}`) {
     await this.trackedTransactionsMutex.runExclusive(() => {
       this.trackedTransactions.delete(txHash); // Delete the transaction from trackedTransactions
@@ -289,5 +290,46 @@ export class TransactionManager {
     });
 
     logger.info(`TransactionManager.dropTransaction: Transaction with hash ${txHash} marked for removal`);
+  }
+
+  // TODO: implement logic to check if transaction should be sped up or dropped
+  // TODO: do more testing, currently pendingTxHashes is always empty - probably need more transactions in the queue
+  private async monitorPendingTxs() {
+    while (true) {
+      await this.trackedTransactionsMutex.runExclusive(async () => {
+        const pendingTxHashes = Array.from(this.trackedTransactions.keys());
+
+        logger.info(`TransactionManager.monitorPendingTxs: Pending transactions: ${pendingTxHashes.length ? pendingTxHashes.join(', ') : 'none'}`);
+
+        for (const txHash of pendingTxHashes) {
+          try {
+            const receipt = await this.client.getTransactionReceipt({ hash: txHash });
+
+            if (!receipt) {
+              const trackedTx = this.trackedTransactions.get(txHash);
+
+              if (trackedTx) {
+                // TODO: implement logic to check if transaction should be sped up or dropped
+                const shouldSpeedUp = false;
+                const shouldDrop = false;
+
+                if (shouldSpeedUp) {
+                  await this.speedUpTransaction(txHash);
+                } else if (shouldDrop) {
+                  await this.dropTransaction(txHash);
+                }
+              }
+            } else {
+              this.trackedTransactions.delete(receipt.transactionHash);
+
+              logger.info(`TransactionManager.monitorMempool: Transaction confirmed with hash: ${txHash}`);
+            }
+          } catch (error) {
+            logger.error(error, `TransactionManager.monitorMempool: Error checking transaction status for hash: ${txHash}`);
+          }
+        }
+      });
+      await new Promise((resolve) => setTimeout(resolve, this.monitorPendingTxsInterval));
+    }
   }
 }
