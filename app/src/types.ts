@@ -3,5 +3,4 @@ export interface TransactionData {
   abi: any,
   functionName: string,
   args: any[],
-  deadline: BigInt,
 }

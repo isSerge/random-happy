@@ -16,7 +16,7 @@ export function createDrandOracle(client: PublicClient) {
   });
 }
 
-export async function createDrandTxData(client: PublicClient, beacon: RandomnessBeacon): Promise<TransactionData> {
+export async function createDrandTxData(client: PublicClient, beacon: RandomnessBeacon) {
   const block = await client.getBlock();
   const blockTimestamp = BigInt(block.timestamp);
   const randomness = `0x${beacon.randomness}`;
@@ -35,11 +35,15 @@ export async function createDrandTxData(client: PublicClient, beacon: Randomness
   // Calculate the deadline
   const deadline = blockTimestamp + timeoutBigInt;
 
-  return {
+  const txData: TransactionData = {
     address: config.DRAND_ORACLE_ADDRESS as `0x${string}`,
     abi,
     functionName: 'setValue',
     args: [blockTimestamp, `0x${beacon.randomness}`],
+  };
+
+  return {
+    txData,
     deadline,
   };
 }

@@ -1,4 +1,4 @@
-import { PrivateKeyAccount, PublicClient, TransactionReceipt, WalletClient } from 'viem';
+import { PrivateKeyAccount, PublicClient, WalletClient } from 'viem';
 import { Mutex } from 'async-mutex';
 
 import { TransactionData } from './types';
@@ -18,15 +18,22 @@ interface QueuedTransaction {
   retries: number;
 }
 
+interface TrackedTransaction extends QueuedTransaction {
+  txHash: `0x${string}`;
+  nonce: bigint;
+  gasPrice?: bigint;
+  // TODO: include gas limit - currently blocked by timeout error
+}
+
 export class TransactionManager {
   private account: PrivateKeyAccount;
   private client: PublicClient & WalletClient;
-  // TODO: should be TinyQueue<QueuedTransaction>, but we're using dynamic import
-  private queue: any;
+  private queue: any; // should be TinyQueue<QueuedTransaction>, but we're using dynamic import because it's a CommonJS module
   private queueInterval: number;
   private maxRetries: number;
   private queueMutex: Mutex;
   private batchSize: number;
+  private trackedTransactions: Map<string, TrackedTransaction>;
 
   constructor(params: TransactionManagerParams) {
     this.account = params.account;
@@ -37,6 +44,7 @@ export class TransactionManager {
     this.queueMutex = new Mutex();
     // TODO: adjust batch size to rate limit
     this.batchSize = params.batchSize || 5;
+    this.trackedTransactions = new Map<string, TrackedTransaction>();
   }
 
   public async initialize() {
@@ -74,23 +82,33 @@ export class TransactionManager {
         }
       });
 
-      // Process transactions concurrently
+      // Concurrent transaction processing:
+      // 1. Create a batch of transactions to process
       const transactionsToProcess: QueuedTransaction[] = [];
+
+      // 2. Pop transactions from the queue until the batch size is reached
       await this.queueMutex.runExclusive(() => {
         while (this.queue.length > 0 && transactionsToProcess.length < this.batchSize) {
           transactionsToProcess.push(this.queue.pop());
         }
       });
 
+      // 3. Iterate over the batch and process each transaction
       await Promise.allSettled(
         transactionsToProcess.map(async ({ tx, deadline, retries }) => {
           try {
-            const receipt = await this.processTransaction(tx);
+            const { receipt, trackedTxData } = await this.submitTransaction(tx);
+
+            // Add transaction to tracked transactions
+            this.trackedTransactions.set(trackedTxData.txHash, { ...trackedTxData, deadline, retries });
 
             if (receipt.status === 'reverted') {
               logger.error(`Transaction ${tx.functionName} with ${deadline} deadline reverted`);
+              // TODO: handle specific revert reasons
             } else {
               logger.info(`Transaction ${tx.functionName} with ${deadline} deadline succeeded`);
+              // Remove transaction from tracked transactions
+              this.trackedTransactions.delete(tx.functionName);
             }
           } catch (error) {
             if (error instanceof Error) {
@@ -147,7 +165,7 @@ export class TransactionManager {
     return defaultGasLimit;
   }
 
-  private async processTransaction(tx: TransactionData): Promise<TransactionReceipt> {
+  private async submitTransaction(tx: TransactionData) {
     logger.info(`Processing transaction: ${tx.functionName} on contract: ${tx.address} `);
 
     const gasLimit = await this.estimateGasWithFallback(tx);
@@ -160,6 +178,7 @@ export class TransactionManager {
 
     logger.info(`Current gas price: ${currentGasPrice}, Gas price with buffer: ${gasPrice} `);
 
+    // TODO: consider adding condition to check if simulation is enabled or necessary
     // Simulate transaction
     const { request } = await this.client.simulateContract({
       ...tx,
@@ -167,6 +186,14 @@ export class TransactionManager {
       chain: this.client.chain,
       gas: gasLimit,
       gasPrice,
+    });
+
+    // TODO: should use Mutex for nonce tracking, because there is a chance nonce will be consumed by another transaction
+    // Get current nonce for transaction tracking
+    const nonce = await this.account.nonceManager?.get({
+      address: this.account.address,
+      chainId: this.client.chain!.id,
+      client: this.client
     });
 
     // Submit transaction
@@ -178,15 +205,24 @@ export class TransactionManager {
       hash: txHash,
     });
 
-    logger.info(`Transaction ${txHash} included in block: ${receipt.blockNumber} `);
+    // Transaction details that will be included in the tracked transactions map
+    const trackedTxData = {
+      txHash,
+      tx,
+      nonce: BigInt(nonce || 0),
+      gasPrice,
+    }
 
-    return receipt;
+    return {
+      trackedTxData,
+      receipt,
+    };
   }
 
-  public async addTransaction(tx: TransactionData) {
+  public async addTransaction({ txData, deadline }: { txData: TransactionData; deadline: bigint }) {
     await this.queueMutex.runExclusive(() => {
-      this.queue.push({ tx, deadline: tx.deadline, retries: 0 });
-      logger.info(`Transaction added to queue: ${tx.functionName}, deadline: ${tx.deadline} `);
+      this.queue.push({ txData, deadline, retries: 0 });
+      logger.info(`Transaction added to queue: ${txData.functionName}, deadline: ${deadline} `);
       logger.info(`Queue length: ${this.queue.length}`);
     });
   }
