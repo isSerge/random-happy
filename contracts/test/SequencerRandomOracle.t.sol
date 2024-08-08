@@ -10,6 +10,9 @@ contract SequencerRandomOracleTest is Test {
     uint256 precommitDelay = 10;
     uint256 initialTimestamp = 100;
 
+    event CommitmentSubmitted(uint256 indexed timestamp, bytes32 indexed commitment);
+    event ValueRevealed(uint256 indexed timestamp, bytes32 indexed value);
+
     modifier warpTimestamp() {
         vm.warp(initialTimestamp);
         _;
@@ -24,11 +27,15 @@ contract SequencerRandomOracleTest is Test {
         bytes32 randomValue = keccak256("test");
         bytes32 commitment = keccak256(abi.encode(randomValue));
 
+        vm.expectEmit(true, true, false, true);
+        emit CommitmentSubmitted(T, commitment);
         sequencerOracle.postCommitment(T, commitment);
 
         // Advance the timestamp to allow revealing
         vm.warp(T + 1);
 
+        vm.expectEmit(true, true, false, true);
+        emit ValueRevealed(T, randomValue);
         sequencerOracle.revealValue(T, randomValue);
 
         assertEq(sequencerOracle.getValue(T), randomValue);

@@ -9,6 +9,9 @@ contract SequencerRandomOracle {
     mapping(uint256 => bytes32) public commitments;
     mapping(uint256 => bytes32) public revealedValues;
 
+    event CommitmentSubmitted(uint256 indexed timestamp, bytes32 indexed commitment);
+    event ValueRevealed(uint256 indexed timestamp, bytes32 indexed value);
+
     // Constructor to set the timeout and precommitDelay values
     constructor(uint256 _timeout, uint256 _precommitDelay) {
         timeout = _timeout;
@@ -29,6 +32,8 @@ contract SequencerRandomOracle {
     function postCommitment(uint256 T, bytes32 commitment) external {
         require(block.timestamp <= T - precommitDelay, "Commitment too late");
         commitments[T] = commitment;
+
+        emit CommitmentSubmitted(T, commitment);
     }
 
     // Function to reveal the committed value for a specific timestamp T
@@ -37,6 +42,8 @@ contract SequencerRandomOracle {
         require(block.timestamp <= T + timeout, "Reveal too late");
         require(commitments[T] == keccak256(abi.encode(value)), "Invalid reveal");
         revealedValues[T] = value;
+
+        emit ValueRevealed(T, value);
     }
 
     // Function to get the revealed value for a specific timestamp T
