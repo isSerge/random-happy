@@ -1,4 +1,5 @@
 import { PrivateKeyAccount, PublicClient, WalletClient } from 'viem';
+import { Mutex } from 'async-mutex';
 
 import { TransactionData } from './types';
 import { logger } from './logger';
@@ -23,12 +24,15 @@ export class TransactionManager {
   private queue: any;
   private queueInterval: number;
   private maxRetries: number;
+  private queueMutex: Mutex;
 
   constructor(params: TransactionManagerParams) {
     this.account = params.account;
     this.client = params.client;
     this.queueInterval = params.queueInterval || 1000;
     this.maxRetries = params.maxRetries || 3;
+    // Using Mutex to avoid race conditions and incostistent order of transactions
+    this.queueMutex = new Mutex();
   }
 
   public async initialize() {
@@ -46,49 +50,53 @@ export class TransactionManager {
     return BigInt(block.timestamp);
   }
 
-  public async processQueue() {
+  private async processQueue() {
     while (true) {
-      if (this.queue.length === 0) {
-        logger.info('Queue is empty, waiting for transactions to be added ');
-        await new Promise((resolve) => setTimeout(resolve, this.queueInterval)); // Wait before checking the queue again
-        continue;
-      }
-
-      logger.info(`Processing queue with ${this.queue.length} transactions `);
-
-      const currentBlockTimestamp = await this.getCurrentBlockTimestamp();
-
-      if (this.queue.peek().deadline <= currentBlockTimestamp) {
-        const { tx } = this.queue.pop();
-        logger.warn(`Discarding transaction ${tx.functionName} - deadline passed: ${tx.deadline} `);
-        continue;
-      }
-
-      const { tx, deadline, retries } = this.queue.pop();
-
-      try {
-        const receipt = await this.processTransaction(tx);
-
-        if (receipt.status === 'reverted') {
-          logger.error(`Transaction ${tx.functionName} with ${deadline} deadline reverted`);
-        } else {
-          logger.info(`Transaction ${tx.functionName} with ${deadline} deadline succeeded `);
-        }
-      } catch (error) {
-        if (error instanceof Error) {
-          logger.error(`Failed to process transaction: ${error.message} `);
-        } else {
-          logger.error(`Failed to process transaction: ${String(error)} `);
+      await this.queueMutex.runExclusive(async () => {
+        if (this.queue.length === 0) {
+          logger.info('Queue is empty, waiting for transactions to be added');
+          return;
         }
 
-        // Retry logic
-        if (retries < 3) {
-          logger.info(`Retrying ${tx.functionName} transaction with deadline: ${deadline} `);
-          this.queue.push({ tx, deadline, retries: retries + 1 });
-        } else {
-          logger.warn(`Discarding ${tx.functionName} transaction with ${deadline} deadline - max retries reached: ${this.maxRetries} `);
+        logger.info(`Processing queue with ${this.queue.length} transactions`);
+
+        const currentBlockTimestamp = await this.getCurrentBlockTimestamp();
+
+        while (this.queue.length > 0 && this.queue.peek().deadline <= currentBlockTimestamp) {
+          const { tx } = this.queue.pop();
+          logger.warn(`Discarding transaction ${tx.functionName} - deadline passed: ${tx.deadline}`);
         }
-      }
+
+        if (this.queue.length > 0) {
+          const { tx, deadline, retries } = this.queue.pop();
+
+          try {
+            const receipt = await this.processTransaction(tx);
+
+            if (receipt.status === 'reverted') {
+              logger.error(`Transaction ${tx.functionName} with ${deadline} deadline reverted`);
+            } else {
+              logger.info(`Transaction ${tx.functionName} with ${deadline} deadline succeeded`);
+            }
+          } catch (error) {
+            if (error instanceof Error) {
+              logger.error(`Failed to process transaction: ${error.message}`);
+            } else {
+              logger.error(`Failed to process transaction: ${String(error)}`);
+            }
+
+            // Retry logic
+            if (retries < this.maxRetries) {
+              logger.info(`Retrying ${tx.functionName} transaction with deadline: ${deadline}`);
+              this.queue.push({ tx, deadline, retries: retries + 1 });
+            } else {
+              logger.warn(`Discarding ${tx.functionName} transaction with ${deadline} deadline - max retries reached: ${this.maxRetries}`);
+            }
+          }
+        }
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, this.queueInterval));
     }
   }
 
@@ -157,9 +165,11 @@ export class TransactionManager {
     return receipt;
   }
 
-  public addTransaction(tx: TransactionData) {
-    this.queue.push({ tx, deadline: tx.deadline, retries: 0 });
-    logger.info(`Transaction added to queue: ${tx.functionName}, deadline: ${tx.deadline} `);
-    logger.info(`Queue length: ${this.queue.length} `);
+  public async addTransaction(tx: TransactionData) {
+    await this.queueMutex.runExclusive(() => {
+      this.queue.push({ tx, deadline: tx.deadline, retries: 0 });
+      logger.info(`Transaction added to queue: ${tx.functionName}, deadline: ${tx.deadline}`);
+      logger.info(`Queue length: ${this.queue.length}`);
+    });
   }
 }
