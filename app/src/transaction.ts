@@ -34,6 +34,7 @@ export class TransactionManager {
   private queueMutex: Mutex;
   private batchSize: number;
   private trackedTransactions: Map<string, TrackedTransaction>;
+  private removalSet: Set<string>; // Set of transactions to remove from the queue
 
   constructor(params: TransactionManagerParams) {
     this.account = params.account;
@@ -45,6 +46,7 @@ export class TransactionManager {
     // TODO: adjust batch size to rate limit
     this.batchSize = params.batchSize || 5;
     this.trackedTransactions = new Map<string, TrackedTransaction>();
+    this.removalSet = new Set<`0x${string}`>();
   }
 
   public async initialize() {
@@ -65,12 +67,12 @@ export class TransactionManager {
   private async processQueue() {
     while (true) {
       if (this.queue.length === 0) {
-        logger.info('TransactionManager: Queue is empty, waiting for transactions to be added');
+        logger.info('TransactionManager.processQueue: Queue is empty, waiting for transactions to be added');
         await new Promise((resolve) => setTimeout(resolve, this.queueInterval)); // Wait before checking the queue again
         continue;
       }
 
-      logger.info(`TransactionManager: Processing queue with ${this.queue.length} transactions`);
+      logger.info(`TransactionManager.processQueue: Processing queue with ${this.queue.length} transactions`);
 
       const currentBlockTimestamp = await this.getCurrentBlockTimestamp();
 
@@ -78,7 +80,7 @@ export class TransactionManager {
       await this.queueMutex.runExclusive(() => {
         while (this.queue.length > 0 && this.queue.peek().deadline <= currentBlockTimestamp) {
           const { txData } = this.queue.pop();
-          logger.warn(`TransactionManager: Discarding transaction ${txData.functionName} - deadline passed: ${txData.deadline}`);
+          logger.warn(`TransactionManager.processQueue: Discarding transaction ${txData.functionName} - deadline passed: ${txData.deadline}`);
         }
       });
 
@@ -89,7 +91,14 @@ export class TransactionManager {
       // 2. Pop transactions from the queue until the batch size is reached
       await this.queueMutex.runExclusive(() => {
         while (this.queue.length > 0 && transactionsToProcess.length < this.batchSize) {
-          transactionsToProcess.push(this.queue.pop());
+          const nextTx = this.queue.pop();
+
+          if (!this.removalSet.has(nextTx.tx.hash)) {
+            transactionsToProcess.push(nextTx);
+          } else {
+            this.removalSet.delete(nextTx.tx.hash);
+            logger.info(`TransactionManager.processQueue: Skipping removed transaction: ${nextTx.tx.hash}`);
+          }
         }
       });
 
@@ -103,30 +112,30 @@ export class TransactionManager {
             this.trackedTransactions.set(trackedTxData.txHash, { ...trackedTxData, deadline, retries });
 
             if (receipt.status === 'reverted') {
-              logger.error(`TransactionManager: Transaction ${txData.functionName} with ${deadline} deadline reverted`);
+              logger.error(`TransactionManager.processQueue: Transaction ${txData.functionName} with ${deadline} deadline reverted`);
               // TODO: handle specific revert reasons
             } else {
-              logger.info(`TransactionManager: Transaction ${txData.functionName} with ${deadline} deadline succeeded`);
+              logger.info(`TransactionManager.processQueue: Transaction ${txData.functionName} with ${deadline} deadline succeeded`);
               // Remove transaction from tracked transactions
               this.trackedTransactions.delete(txData.functionName);
             }
           } catch (error) {
             if (error instanceof Error) {
-              logger.error(`TransactionManager: Failed to process transaction: ${error.message}`);
+              logger.error(`TransactionManager.processQueue: Failed to process transaction: ${error.message}`);
             } else {
-              logger.error(`TransactionManager: Failed to process transaction: ${String(error)}`);
+              logger.error(`TransactionManager.processQueue: Failed to process transaction: ${String(error)}`);
             }
 
             // TODO: handle specific errors
 
             // Retry logic
             if (retries < this.maxRetries) {
-              logger.info(`TransactionManager: Retrying ${txData.functionName} transaction with deadline: ${deadline}`);
+              logger.info(`TransactionManager.processQueue: Retrying ${txData.functionName} transaction with deadline: ${deadline}`);
               await this.queueMutex.runExclusive(() => {
                 this.queue.push({ txData, deadline, retries: retries + 1 });
               });
             } else {
-              logger.warn(`TransactionManager: Discarding ${txData.functionName} transaction with ${deadline} deadline - max retries reached: ${this.maxRetries}`);
+              logger.warn(`TransactionManager.processQueue: Discarding ${txData.functionName} transaction with ${deadline} deadline - max retries reached: ${this.maxRetries}`);
             }
           }
         })
@@ -166,7 +175,7 @@ export class TransactionManager {
   }
 
   private async submitTransaction(txData: TransactionData) {
-    logger.info(`TransactionManager: Processing transaction: ${txData.functionName} on contract: ${txData.address} `);
+    logger.info(`TransactionManager.submitTransaction: Submitting transaction: ${txData.functionName} on contract: ${txData.address} `);
 
     const gasLimit = await this.estimateGasWithFallback(txData);
 
@@ -176,7 +185,7 @@ export class TransactionManager {
     // Add a buffer to the gas price
     const gasPrice = currentGasPrice + BigInt(Math.floor(Number(currentGasPrice) * 0.1)); // 10% buffer
 
-    logger.info(`TransactionManager: Current gas price: ${currentGasPrice}, Gas price with buffer: ${gasPrice} `);
+    logger.info(`TransactionManager.submitTransaction: Current gas price: ${currentGasPrice}, Gas price with buffer: ${gasPrice} `);
 
     // TODO: consider adding condition to check if simulation is enabled or necessary
     // Simulate transaction
@@ -199,7 +208,7 @@ export class TransactionManager {
     // Submit transaction
     const txHash = await this.client.writeContract(request);
 
-    logger.info(`TransactionManager: Transaction sent: ${txHash} `);
+    logger.info(`TransactionManager.submitTransaction: Transaction sent: ${txHash} `);
 
     const receipt = await this.client.waitForTransactionReceipt({
       hash: txHash,
@@ -222,8 +231,8 @@ export class TransactionManager {
   public async addTransaction({ txData, deadline }: { txData: TransactionData; deadline: bigint }) {
     await this.queueMutex.runExclusive(() => {
       this.queue.push({ txData, deadline, retries: 0 });
-      logger.info(`TransactionManager: Transaction added to queue: ${txData.functionName}, deadline: ${deadline} `);
-      logger.info(`TransactionManager: Queue length: ${this.queue.length}`);
+      logger.info(`TransactionManager.addTransaction: Transaction added to queue: ${txData.functionName}, deadline: ${deadline} `);
+      logger.info(`TransactionManager.addTransaction: Queue length: ${this.queue.length}`);
     });
   }
 
@@ -232,11 +241,11 @@ export class TransactionManager {
   private async speedUpTransaction(txHash: `0x${string}`) {
     const trackedTx = this.trackedTransactions.get(txHash);
     if (!trackedTx) {
-      logger.warn(`TransactionManager: Transaction with hash ${txHash} not found`);
+      logger.warn(`TransactionManager.speedUpTransaction: Transaction with hash ${txHash} not found`);
       return;
     }
 
-    logger.info(`TransactionManager: Speeding up transaction with hash: ${txHash} by increasing gas price`);
+    logger.info(`TransactionManager.speedUpTransaction: Speeding up transaction with hash: ${txHash} by increasing gas price`);
 
     const originalGasPrice = trackedTx.gasPrice ? trackedTx.gasPrice : await this.client.getGasPrice();
     const newGasPrice = originalGasPrice + BigInt(Math.floor(Number(originalGasPrice) * 0.1)); // 10% increase
@@ -249,5 +258,22 @@ export class TransactionManager {
         gasPrice: newGasPrice,
       });
     });
+  }
+
+  // TODO: implement monitoring of pending transactions and drop transactions when necessary
+  // @ts-ignore: TS6133
+  private async dropTransaction(txHash: `0x${string}`) {
+    const trackedTx = this.trackedTransactions.get(txHash);
+    if (!trackedTx) {
+      logger.warn(`TransactionManager.dropTransaction: Transaction with hash ${txHash} not found`);
+      return;
+    }
+
+    await this.queueMutex.runExclusive(() => {
+      this.trackedTransactions.delete(txHash);
+      this.removalSet.add(txHash);
+    });
+
+    logger.info(`TransactionManager.dropTransaction: Transaction with hash ${txHash} marked for removal`);
   }
 }
