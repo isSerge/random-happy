@@ -1,4 +1,4 @@
-import { PrivateKeyAccount, PublicClient, WalletClient } from 'viem';
+import { PrivateKeyAccount, PublicClient, TransactionReceipt, WalletClient } from 'viem';
 import { Mutex } from 'async-mutex';
 
 import { TransactionData } from './types';
@@ -9,6 +9,7 @@ interface TransactionManagerParams {
   client: PublicClient & WalletClient;
   queueInterval?: number;
   maxRetries?: number;
+  batchSize?: number;
 }
 
 interface QueuedTransaction {
@@ -25,6 +26,7 @@ export class TransactionManager {
   private queueInterval: number;
   private maxRetries: number;
   private queueMutex: Mutex;
+  private batchSize: number;
 
   constructor(params: TransactionManagerParams) {
     this.account = params.account;
@@ -33,6 +35,8 @@ export class TransactionManager {
     this.maxRetries = params.maxRetries || 3;
     // Using Mutex to avoid race conditions and incostistent order of transactions
     this.queueMutex = new Mutex();
+    // TODO: adjust batch size to rate limit
+    this.batchSize = params.batchSize || 5;
   }
 
   public async initialize() {
@@ -52,24 +56,34 @@ export class TransactionManager {
 
   private async processQueue() {
     while (true) {
-      await this.queueMutex.runExclusive(async () => {
-        if (this.queue.length === 0) {
-          logger.info('Queue is empty, waiting for transactions to be added');
-          return;
-        }
+      if (this.queue.length === 0) {
+        logger.info('Queue is empty, waiting for transactions to be added');
+        await new Promise((resolve) => setTimeout(resolve, this.queueInterval)); // Wait before checking the queue again
+        continue;
+      }
 
-        logger.info(`Processing queue with ${this.queue.length} transactions`);
+      logger.info(`Processing queue with ${this.queue.length} transactions`);
 
-        const currentBlockTimestamp = await this.getCurrentBlockTimestamp();
+      const currentBlockTimestamp = await this.getCurrentBlockTimestamp();
 
+      // Remove expired transactions
+      await this.queueMutex.runExclusive(() => {
         while (this.queue.length > 0 && this.queue.peek().deadline <= currentBlockTimestamp) {
           const { tx } = this.queue.pop();
           logger.warn(`Discarding transaction ${tx.functionName} - deadline passed: ${tx.deadline}`);
         }
+      });
 
-        if (this.queue.length > 0) {
-          const { tx, deadline, retries } = this.queue.pop();
+      // Process transactions concurrently
+      const transactionsToProcess: QueuedTransaction[] = [];
+      await this.queueMutex.runExclusive(() => {
+        while (this.queue.length > 0 && transactionsToProcess.length < this.batchSize) {
+          transactionsToProcess.push(this.queue.pop());
+        }
+      });
 
+      await Promise.allSettled(
+        transactionsToProcess.map(async ({ tx, deadline, retries }) => {
           try {
             const receipt = await this.processTransaction(tx);
 
@@ -85,16 +99,20 @@ export class TransactionManager {
               logger.error(`Failed to process transaction: ${String(error)}`);
             }
 
+            // TODO: handle specific errors
+
             // Retry logic
             if (retries < this.maxRetries) {
               logger.info(`Retrying ${tx.functionName} transaction with deadline: ${deadline}`);
-              this.queue.push({ tx, deadline, retries: retries + 1 });
+              await this.queueMutex.runExclusive(() => {
+                this.queue.push({ tx, deadline, retries: retries + 1 });
+              });
             } else {
               logger.warn(`Discarding ${tx.functionName} transaction with ${deadline} deadline - max retries reached: ${this.maxRetries}`);
             }
           }
-        }
-      });
+        })
+      );
 
       await new Promise((resolve) => setTimeout(resolve, this.queueInterval));
     }
@@ -103,7 +121,7 @@ export class TransactionManager {
   private async estimateGasWithFallback(__tx: TransactionData) {
     const defaultGasLimit = BigInt(1000000);
 
-    // TODO: this breaks, investigate why
+    // TODO: investigate why this is failing with timeout error
     // try {
     //   // Estimate gas
     //   const gasEstimate = await this.client.estimateGas({
@@ -112,7 +130,7 @@ export class TransactionManager {
     //   });
 
     //   // Add a buffer to the gas estimate
-    //   const gasLimit = gasEstimate + BigInt(Math.floor(Number(gasEstimate) * 0.1)); // 10% buffer
+    //   const gasLimit = gasEstimate + BigInt(Math.floor(Number(gasEstimate) * 0.1));
 
     //   logger.info(`Estimated gas: ${ gasEstimate }, Gas limit with buffer: ${ gasLimit }, Default gas limit: ${ defaultGasLimit } `);
 
@@ -129,7 +147,7 @@ export class TransactionManager {
     return defaultGasLimit;
   }
 
-  private async processTransaction(tx: TransactionData) {
+  private async processTransaction(tx: TransactionData): Promise<TransactionReceipt> {
     logger.info(`Processing transaction: ${tx.functionName} on contract: ${tx.address} `);
 
     const gasLimit = await this.estimateGasWithFallback(tx);
@@ -168,7 +186,7 @@ export class TransactionManager {
   public async addTransaction(tx: TransactionData) {
     await this.queueMutex.runExclusive(() => {
       this.queue.push({ tx, deadline: tx.deadline, retries: 0 });
-      logger.info(`Transaction added to queue: ${tx.functionName}, deadline: ${tx.deadline}`);
+      logger.info(`Transaction added to queue: ${tx.functionName}, deadline: ${tx.deadline} `);
       logger.info(`Queue length: ${this.queue.length}`);
     });
   }
