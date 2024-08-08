@@ -26,6 +26,9 @@ export async function main() {
     client,
   });
 
+  // Initialize the transaction manager, which will start processing the queue
+  await txManager.initialize();
+
   // Start fetching randomness from drand
   const abortController = new AbortController();
   const drandIterator = fetchDrandRandomness(abortController);
@@ -36,8 +39,7 @@ export async function main() {
   for await (const beacon of drandIterator) {
     const drandSubmissionTx = await createDrandTxData(client, beacon);
 
-    // TODO: should enqueue transactions and process them in order
-    await txManager.processTransaction(drandSubmissionTx);
+    await txManager.addTransaction(drandSubmissionTx);
   }
 }
 

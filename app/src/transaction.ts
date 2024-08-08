@@ -1,25 +1,95 @@
 import { PrivateKeyAccount, PublicClient, WalletClient } from 'viem';
+
 import { TransactionData } from './types';
 import { logger } from './logger';
 
 interface TransactionManagerParams {
   account: PrivateKeyAccount;
   client: PublicClient & WalletClient;
+  queueInterval?: number;
   maxRetries?: number;
-  retryDelay?: number;
+}
+
+interface QueuedTransaction {
+  tx: TransactionData;
+  deadline: bigint;
+  retries: number;
 }
 
 export class TransactionManager {
   private account: PrivateKeyAccount;
   private client: PublicClient & WalletClient;
+  // TODO: should be TinyQueue<QueuedTransaction>, but we're using dynamic import
+  private queue: any;
+  private queueInterval: number;
   private maxRetries: number;
-  private retryDelay: number;
 
   constructor(params: TransactionManagerParams) {
     this.account = params.account;
     this.client = params.client;
+    this.queueInterval = params.queueInterval || 1000;
     this.maxRetries = params.maxRetries || 3;
-    this.retryDelay = params.retryDelay || 2000; // Default to 2 seconds
+  }
+
+  public async initialize() {
+    // Initialize queue: using dynamic import since it's a CommonJS module
+    const { default: TinyQueue } = await import('tinyqueue');
+    this.queue = new TinyQueue<QueuedTransaction>([], (a, b) => Number(a.deadline - b.deadline));
+
+    logger.info('Transaction manager initialized');
+
+    this.processQueue();
+  }
+
+  private async getCurrentBlockTimestamp(): Promise<bigint> {
+    const block = await this.client.getBlock();
+    return BigInt(block.timestamp);
+  }
+
+  public async processQueue() {
+    while (true) {
+      if (this.queue.length === 0) {
+        logger.info('Queue is empty, waiting for transactions to be added ');
+        await new Promise((resolve) => setTimeout(resolve, this.queueInterval)); // Wait before checking the queue again
+        continue;
+      }
+
+      logger.info(`Processing queue with ${this.queue.length} transactions `);
+
+      const currentBlockTimestamp = await this.getCurrentBlockTimestamp();
+
+      if (this.queue.peek().deadline <= currentBlockTimestamp) {
+        const { tx } = this.queue.pop();
+        logger.warn(`Discarding transaction ${tx.functionName} - deadline passed: ${tx.deadline} `);
+        continue;
+      }
+
+      const { tx, deadline, retries } = this.queue.pop();
+
+      try {
+        const receipt = await this.processTransaction(tx);
+
+        if (receipt.status === 'reverted') {
+          logger.error(`Transaction ${tx.functionName} with ${deadline} deadline reverted`);
+        } else {
+          logger.info(`Transaction ${tx.functionName} with ${deadline} deadline succeeded `);
+        }
+      } catch (error) {
+        if (error instanceof Error) {
+          logger.error(`Failed to process transaction: ${error.message} `);
+        } else {
+          logger.error(`Failed to process transaction: ${String(error)} `);
+        }
+
+        // Retry logic
+        if (retries < 3) {
+          logger.info(`Retrying ${tx.functionName} transaction with deadline: ${deadline} `);
+          this.queue.push({ tx, deadline, retries: retries + 1 });
+        } else {
+          logger.warn(`Discarding ${tx.functionName} transaction with ${deadline} deadline - max retries reached: ${this.maxRetries} `);
+        }
+      }
+    }
   }
 
   private async estimateGasWithFallback(__tx: TransactionData) {
@@ -36,14 +106,14 @@ export class TransactionManager {
     //   // Add a buffer to the gas estimate
     //   const gasLimit = gasEstimate + BigInt(Math.floor(Number(gasEstimate) * 0.1)); // 10% buffer
 
-    //   logger.info(`Estimated gas: ${gasEstimate}, Gas limit with buffer: ${gasLimit}, Default gas limit: ${defaultGasLimit}`);
+    //   logger.info(`Estimated gas: ${ gasEstimate }, Gas limit with buffer: ${ gasLimit }, Default gas limit: ${ defaultGasLimit } `);
 
     //   return gasLimit;
     // } catch (error) {
     //   if (error instanceof Error) {
-    //     logger.error(`Failed to estimate gas: ${error.message}`);
+    //     logger.error(`Failed to estimate gas: ${ error.message } `);
     //   } else {
-    //     logger.error(`Failed to estimate gas: ${String(error)}`);
+    //     logger.error(`Failed to estimate gas: ${ String(error) } `);
     //   }
     //   return defaultGasLimit;
     // }
@@ -51,60 +121,45 @@ export class TransactionManager {
     return defaultGasLimit;
   }
 
-  // TODO: implement a backoff strategy
-  private async sleep(ms: number) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  private async processTransaction(tx: TransactionData) {
+    logger.info(`Processing transaction: ${tx.functionName} on contract: ${tx.address} `);
+
+    const gasLimit = await this.estimateGasWithFallback(tx);
+
+    // Get current gas price
+    const currentGasPrice = await this.client.getGasPrice();
+
+    // Add a buffer to the gas price
+    const gasPrice = currentGasPrice + BigInt(Math.floor(Number(currentGasPrice) * 0.1)); // 10% buffer
+
+    logger.info(`Current gas price: ${currentGasPrice}, Gas price with buffer: ${gasPrice} `);
+
+    // Simulate transaction
+    const { request } = await this.client.simulateContract({
+      ...tx,
+      account: this.account,
+      chain: this.client.chain,
+      gas: gasLimit,
+      gasPrice,
+    });
+
+    // Submit transaction
+    const txHash = await this.client.writeContract(request);
+
+    logger.info(`Transaction sent: ${txHash} `);
+
+    const receipt = await this.client.waitForTransactionReceipt({
+      hash: txHash,
+    });
+
+    logger.info(`Transaction ${txHash} included in block: ${receipt.blockNumber} `);
+
+    return receipt;
   }
 
-  public async processTransaction(tx: TransactionData) {
-    let attempts = 0;
-
-    while (attempts < this.maxRetries) {
-      try {
-        logger.info(`Processing transaction: ${tx.functionName} on contract: ${tx.address}, Attempt: ${attempts + 1}`);
-
-        const gasLimit = await this.estimateGasWithFallback(tx);
-
-        // Get current gas price
-        const currentGasPrice = await this.client.getGasPrice();
-
-        // Add a buffer to the gas price
-        const gasPrice = currentGasPrice + BigInt(Math.floor(Number(currentGasPrice) * 0.1)); // 10% buffer
-
-        logger.info(`Current gas price: ${currentGasPrice}, Gas price with buffer: ${gasPrice}`);
-
-        // Simulate transaction
-        const { request } = await this.client.simulateContract({
-          ...tx,
-          account: this.account,
-          chain: this.client.chain,
-          gas: gasLimit,
-          gasPrice,
-        });
-
-        // Submit transaction
-        const txHash = await this.client.writeContract(request);
-
-        logger.info(`Transaction sent: ${txHash}`);
-
-        const receipt = await this.client.waitForTransactionReceipt({
-          hash: txHash,
-        });
-
-        logger.info(`Transaction status: ${receipt.status}`);
-        return receipt;
-      } catch (error) {
-        attempts += 1;
-        if (attempts >= this.maxRetries) {
-          logger.error(`Failed to process transaction after ${this.maxRetries} attempts: ${error instanceof Error ? error.message : String(error)}`);
-          throw error;
-        }
-        logger.warn(`Attempt ${attempts} failed: ${error instanceof Error ? error.message : String(error)}. Retrying in ${this.retryDelay}ms...`);
-        await this.sleep(this.retryDelay);
-      }
-    }
-
-    // If the loop completes without returning, throw an error to ensure a return value.
-    throw new Error('Unexpected error: Transaction processing loop exited without returning a value.');
+  public addTransaction(tx: TransactionData) {
+    this.queue.push({ tx, deadline: tx.deadline, retries: 0 });
+    logger.info(`Transaction added to queue: ${tx.functionName}, deadline: ${tx.deadline} `);
+    logger.info(`Queue length: ${this.queue.length} `);
   }
 }
