@@ -34,7 +34,9 @@ export class TransactionManager {
   private queueMutex: Mutex;
   private batchSize: number;
   private trackedTransactions: Map<string, TrackedTransaction>;
+  private trackedTransactionsMutex: Mutex;
   private removalSet: Set<string>; // Set of transactions to remove from the queue
+  private removalSetMutex: Mutex;
 
   constructor(params: TransactionManagerParams) {
     this.account = params.account;
@@ -46,7 +48,9 @@ export class TransactionManager {
     // TODO: adjust batch size to rate limit
     this.batchSize = params.batchSize || 5;
     this.trackedTransactions = new Map<string, TrackedTransaction>();
+    this.trackedTransactionsMutex = new Mutex();
     this.removalSet = new Set<`0x${string}`>();
+    this.removalSetMutex = new Mutex();
   }
 
   public async initialize() {
@@ -109,7 +113,9 @@ export class TransactionManager {
             const { receipt, trackedTxData } = await this.submitTransaction(txData);
 
             // Add transaction to tracked transactions
-            this.trackedTransactions.set(trackedTxData.txHash, { ...trackedTxData, deadline, retries });
+            await this.trackedTransactionsMutex.runExclusive(() => {
+              this.trackedTransactions.set(trackedTxData.txHash, { ...trackedTxData, deadline, retries });
+            });
 
             if (receipt.status === 'reverted') {
               logger.error(`TransactionManager.processQueue: Transaction ${txData.functionName} with ${deadline} deadline reverted`);
@@ -117,7 +123,9 @@ export class TransactionManager {
             } else {
               logger.info(`TransactionManager.processQueue: Transaction ${txData.functionName} with ${deadline} deadline succeeded`);
               // Remove transaction from tracked transactions
-              this.trackedTransactions.delete(txData.functionName);
+              await this.trackedTransactionsMutex.runExclusive(() => {
+                this.trackedTransactions.delete(txData.functionName);
+              });
             }
           } catch (error) {
             if (error instanceof Error) {
@@ -239,23 +247,25 @@ export class TransactionManager {
   // TODO: implement monitoring of pending transactions and speed up transactions with low gas price
   // @ts-ignore: TS6133
   private async speedUpTransaction(txHash: `0x${string}`) {
-    const trackedTx = this.trackedTransactions.get(txHash);
-    if (!trackedTx) {
-      logger.warn(`TransactionManager.speedUpTransaction: Transaction with hash ${txHash} not found`);
-      return;
-    }
+    await this.trackedTransactionsMutex.runExclusive(async () => {
+      const trackedTx = this.trackedTransactions.get(txHash);
+      if (!trackedTx) {
+        logger.warn(`TransactionManager.speedUpTransaction: Transaction with hash ${txHash} not found`);
+        return;
+      }
 
-    logger.info(`TransactionManager.speedUpTransaction: Speeding up transaction with hash: ${txHash} by increasing gas price`);
+      logger.info(`TransactionManager.speedUpTransaction: Speeding up transaction with hash: ${txHash} by increasing gas price`);
 
-    const originalGasPrice = trackedTx.gasPrice ? trackedTx.gasPrice : await this.client.getGasPrice();
-    const newGasPrice = originalGasPrice + BigInt(Math.floor(Number(originalGasPrice) * 0.1)); // 10% increase
+      const originalGasPrice = trackedTx.gasPrice ? trackedTx.gasPrice : await this.client.getGasPrice();
+      const newGasPrice = originalGasPrice + BigInt(Math.floor(Number(originalGasPrice) * 0.1));
 
-    await this.queueMutex.runExclusive(() => {
-      this.queue.push({
-        txData: trackedTx.txData,
-        deadline: trackedTx.deadline,
-        retries: trackedTx.retries + 1,
-        gasPrice: newGasPrice,
+      await this.queueMutex.runExclusive(() => {
+        this.queue.push({
+          txData: trackedTx.txData,
+          deadline: trackedTx.deadline,
+          retries: trackedTx.retries + 1,
+          gasPrice: newGasPrice,
+        });
       });
     });
   }
@@ -263,15 +273,12 @@ export class TransactionManager {
   // TODO: implement monitoring of pending transactions and drop transactions when necessary
   // @ts-ignore: TS6133
   private async dropTransaction(txHash: `0x${string}`) {
-    const trackedTx = this.trackedTransactions.get(txHash);
-    if (!trackedTx) {
-      logger.warn(`TransactionManager.dropTransaction: Transaction with hash ${txHash} not found`);
-      return;
-    }
+    await this.trackedTransactionsMutex.runExclusive(() => {
+      this.trackedTransactions.delete(txHash); // Delete the transaction from trackedTransactions
+    });
 
-    await this.queueMutex.runExclusive(() => {
-      this.trackedTransactions.delete(txHash);
-      this.removalSet.add(txHash);
+    await this.removalSetMutex.runExclusive(() => {
+      this.removalSet.add(txHash); // Add the transaction hash to the removalSet
     });
 
     logger.info(`TransactionManager.dropTransaction: Transaction with hash ${txHash} marked for removal`);
