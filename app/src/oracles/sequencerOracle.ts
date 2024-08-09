@@ -27,9 +27,11 @@ export async function createSequencerTxData(client: PublicClient, commitment: st
 
   const timeoutBigInt = BigInt(timeout as string | number);
   const precommitDelayBigInt = BigInt(precommitDelay as string | number);
+  // TODO: investigate: currently postCommitment reverts due to Commitment too late, using a buffer to avoid this
+  const buffer = BigInt(1000);
 
   // Calculate the future timestamp
-  const futureTimestamp = blockTimestamp + precommitDelayBigInt;
+  const futureTimestamp = blockTimestamp + precommitDelayBigInt + buffer;
 
   logger.info(`Creating sequencer commitment transaction: ${commitment} for future timestamp: ${futureTimestamp}`);
 
