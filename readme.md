@@ -65,3 +65,19 @@ make start-app
 
 This will install NPM packages and run the Node.js application, which will
 interact with the deployed smart contracts.
+
+4. Start demo script (Monitor oracles)
+
+Once app is submitting randomness to oracles, we can start a script to monitor
+oracles (in separate terminal):
+
+```bash
+make monitor-oracles
+```
+
+This should output randomness values for each block:
+
+```
+[2024-08-09 06:28:22] INFO: timestamp: 1723184897
+[2024-08-09 06:28:22] INFO: drand(T): 0x6f1ded684beb1c7a4541e456d4c94d262aec4020503cbcea191b221b3e4f0b2a
+```

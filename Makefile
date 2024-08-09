@@ -6,3 +6,6 @@ deploy-contracts:
 
 start-app:
 	cd app && npm i && npm run build && npm start
+
+monitor-oracles:
+	cd app && npm i && npm run build && npm run monitor-oracles
