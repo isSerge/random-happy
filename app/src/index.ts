@@ -38,7 +38,6 @@ export async function main() {
   await txManager.initialize();
 
   // Function to handle drand randomness
-  // @ts-ignore
   const handleDrandRandomness = async () => {
     // Start fetching randomness from drand
     const abortController = new AbortController();
@@ -55,10 +54,10 @@ export async function main() {
     while (true) {
       const randomValue = generateRandomValue();
 
-      const [postTxData] = await createSequencerTxData(client, randomValue);
+      const [postTxData, revealTxData] = await createSequencerTxData(client, randomValue);
 
       await txManager.addTransaction(postTxData);
-      // await txManager.addTransaction(revealTxData);
+      await txManager.addTransaction(revealTxData);
 
       // Wait for 2 seconds before generating the next commitment
       await new Promise((resolve) => setTimeout(resolve, SEQUENCER_COMMITMENT_INTERVAL));
@@ -67,7 +66,7 @@ export async function main() {
 
   // Start handling drand randomness and sequencer commitments concurrently
   await Promise.all([
-    // handleDrandRandomness(),
+    handleDrandRandomness(),
     handleSequencerCommitments(),
   ]);
 }

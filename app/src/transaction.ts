@@ -37,6 +37,8 @@ export class TransactionManager {
   private removalSet: Set<`0x${string}`>; // Set of transactions to remove from the queue
   private removalSetMutex: Mutex;
   private monitorPendingTxsInterval: number;
+  // TODO: using array for simplicity, probably should use a priority queue (with Mutex?) or better queue for both main and delayed transactions
+  private delayedQueue: QueuedTransaction[]; // Queue for transactions that are not ready to be processed yet (i.e. revealValue transactions)
 
   constructor(params: TransactionManagerParams) {
     this.account = params.account;
@@ -52,6 +54,7 @@ export class TransactionManager {
     this.removalSet = new Set<`0x${string}`>();
     this.removalSetMutex = new Mutex();
     this.monitorPendingTxsInterval = params.monitorPendingTxsInterval || 1000;
+    this.delayedQueue = [];
   }
 
   public async initialize() {
@@ -65,9 +68,9 @@ export class TransactionManager {
     this.monitorPendingTxs();
   }
 
-  public async addTransaction({ txData, deadline }: { txData: TransactionData; deadline: bigint }) {
+  public async addTransaction({ txData, deadline, notBefore }: TransactionWithDeadline) {
     await this.queueMutex.runExclusive(() => {
-      this.queue.push({ txData, deadline, retries: 0 });
+      this.queue.push({ txData, deadline, retries: 0, notBefore });
       logger.info(`TransactionManager.addTransaction: Transaction added to queue: ${txData.functionName}, deadline: ${deadline} `);
       logger.info(`TransactionManager.addTransaction: Queue length: ${this.queue.length}`);
     });
@@ -80,83 +83,107 @@ export class TransactionManager {
 
   private async processQueue() {
     while (true) {
-      if (this.queue.length === 0) {
-        logger.info('TransactionManager.processQueue: Queue is empty, waiting for transactions to be added');
-        await new Promise((resolve) => setTimeout(resolve, this.queueInterval)); // Wait before checking the queue again
+      if (this.queue.length === 0 && this.delayedQueue.length === 0) {
+        logger.info('TransactionManager.processQueue: Both main and delayed queues are empty, waiting for transactions to be added');
+        await new Promise((resolve) => setTimeout(resolve, this.queueInterval));
         continue;
       }
 
-      logger.info(`TransactionManager.processQueue: Processing queue with ${this.queue.length} transactions`);
-
       const currentBlockTimestamp = await this.getCurrentBlockTimestamp();
 
-      // Remove expired transactions
+      await this.requeueDelayedTransactions(this.delayedQueue, currentBlockTimestamp);
+
       await this.queueMutex.runExclusive(() => {
-        while (this.queue.length > 0 && this.queue.peek().deadline <= currentBlockTimestamp) {
-          const { txData } = this.queue.pop();
-          logger.warn(`TransactionManager.processQueue: Discarding transaction ${txData.functionName} - deadline passed: ${txData.deadline}`);
-        }
+        this.removeExpiredTransactions(currentBlockTimestamp);
       });
 
-      // Concurrent transaction processing:
-      // 1. Create a batch of transactions to process
-      const transactionsToProcess: QueuedTransaction[] = [];
+      if (this.queue.length === 0) {
+        await new Promise((resolve) => setTimeout(resolve, this.queueInterval));
+        continue;
+      }
 
-      // 2. Pop transactions from the queue until the batch size is reached
-      await this.queueMutex.runExclusive(() => {
-        while (this.queue.length > 0 && transactionsToProcess.length < this.batchSize) {
-          const nextTx: QueuedTransaction = this.queue.pop();
+      const transactionsToProcess: QueuedTransaction[] = await this.getTransactionsToProcess(currentBlockTimestamp);
 
-          transactionsToProcess.push(nextTx);
-
-          // TODO: implement removalSet logic
-          // if (!this.removalSet.has(nextTx.txData.hash)) {
-          //   transactionsToProcess.push(nextTx);
-          // } else {
-          //   this.removalSet.delete(nextTx.txData.hash);
-          //   logger.info(`TransactionManager.processQueue: Skipping removed transaction: ${nextTx.txData.hash}`);
-          // }
-        }
-      });
-
-      // 3. Iterate over the batch and process each transaction
-      await Promise.allSettled(
-        transactionsToProcess.map(async ({ txData, deadline, retries }) => {
-          try {
-            const { receipt, trackedTxData } = await this.submitTransaction(txData);
-
-            // Add transaction to tracked transactions
-            await this.trackedTransactionsMutex.runExclusive(() => {
-              this.trackedTransactions.set(trackedTxData.txHash, { ...trackedTxData, deadline, retries });
-            });
-
-            if (receipt.status === 'reverted') {
-              await this.handleTxRevert(receipt.transactionHash);
-            } else {
-              logger.info(`TransactionManager.processQueue: Transaction ${txData.functionName} with ${deadline} deadline succeeded`);
-              // Remove transaction from tracked transactions
-              await this.trackedTransactionsMutex.runExclusive(() => {
-                this.trackedTransactions.delete(receipt.transactionHash);
-              });
-            }
-          } catch (error) {
-            await this.handleTxError(error);
-
-            // Retry logic
-            if (retries < this.maxRetries) {
-              logger.info(`TransactionManager.processQueue: Retrying ${txData.functionName} transaction with deadline: ${deadline}`);
-              await this.queueMutex.runExclusive(() => {
-                this.queue.push({ txData, deadline, retries: retries + 1 });
-              });
-            } else {
-              logger.warn(`TransactionManager.processQueue: Discarding ${txData.functionName} transaction with ${deadline} deadline - max retries reached: ${this.maxRetries}`);
-            }
-          }
-        })
-      );
+      await this.processTransactions(transactionsToProcess);
 
       await new Promise((resolve) => setTimeout(resolve, this.queueInterval));
     }
+  }
+
+  private async requeueDelayedTransactions(delayedQueue: QueuedTransaction[], currentBlockTimestamp: bigint) {
+    for (let i = 0; i < delayedQueue.length; i++) {
+      const delayedTx = delayedQueue[i];
+      if (delayedTx.notBefore && currentBlockTimestamp >= delayedTx.notBefore) {
+        this.queue.push(delayedTx);
+        delayedQueue.splice(i, 1);
+        i--;
+        logger.info(`TransactionManager.requeueDelayedTransactions: Moved delayed transaction ${delayedTx.txData.functionName} back to main queue`);
+      }
+    }
+  }
+
+  private removeExpiredTransactions(currentBlockTimestamp: bigint) {
+    while (this.queue.length > 0 && this.queue.peek().deadline <= currentBlockTimestamp) {
+      const { txData } = this.queue.pop();
+      logger.warn(`TransactionManager.removeExpiredTransactions: Discarding transaction ${txData.functionName} - deadline passed: ${txData.deadline}`);
+    }
+  }
+
+  private async getTransactionsToProcess(currentBlockTimestamp: bigint): Promise<QueuedTransaction[]> {
+    const transactionsToProcess: QueuedTransaction[] = [];
+    await this.queueMutex.runExclusive(() => {
+      while (this.queue.length > 0 && transactionsToProcess.length < this.batchSize) {
+        const nextTx: QueuedTransaction = this.queue.pop();
+        if (nextTx.notBefore && currentBlockTimestamp < nextTx.notBefore) {
+          this.delayedQueue.push(nextTx);
+          logger.info(`TransactionManager.getTransactionsToProcess: Skipping ${nextTx.txData.functionName} - too early to submit. Added to delayed queue.`);
+        } else {
+          transactionsToProcess.push(nextTx);
+        }
+
+        // TODO: implement logic to remove transactions if they are in the removalSet
+        // if (!this.removalSet.has(nextTx.txData.hash)) {
+        //   transactionsToProcess.push(nextTx);
+        // } else {
+        //   this.removalSet.delete(nextTx.txData.hash);
+        //   logger.info(`TransactionManager.processQueue: Skipping removed transaction: ${nextTx.txData.hash}`);
+        // }
+      }
+    });
+    return transactionsToProcess;
+  }
+
+  private async processTransactions(transactionsToProcess: QueuedTransaction[]) {
+    await Promise.allSettled(
+      transactionsToProcess.map(async ({ txData, deadline, retries }) => {
+        try {
+          const { receipt, trackedTxData } = await this.submitTransaction(txData);
+
+          await this.trackedTransactionsMutex.runExclusive(() => {
+            this.trackedTransactions.set(trackedTxData.txHash, { ...trackedTxData, deadline, retries });
+          });
+
+          if (receipt.status === 'reverted') {
+            await this.handleTxRevert(receipt.transactionHash);
+          } else {
+            logger.info(`TransactionManager.processTransactions: Transaction ${txData.functionName} with ${deadline} deadline succeeded`);
+            await this.trackedTransactionsMutex.runExclusive(() => {
+              this.trackedTransactions.delete(receipt.transactionHash);
+            });
+          }
+        } catch (error) {
+          await this.handleTxError(error);
+          if (retries < this.maxRetries) {
+            logger.info(`TransactionManager.processTransactions: Retrying ${txData.functionName} transaction with deadline: ${deadline}`);
+            await this.queueMutex.runExclusive(() => {
+              this.queue.push({ txData, deadline, retries: retries + 1 });
+            });
+          } else {
+            logger.warn(`TransactionManager.processTransactions: Discarding ${txData.functionName} transaction with ${deadline} deadline - max retries reached: ${this.maxRetries}`);
+          }
+        }
+      })
+    );
   }
 
   // TODO: handle specific transaction errors
