@@ -8,7 +8,7 @@
     "build": "tsc",
     "dev": "nodemon --watch 'src/**/*.ts' --ext ts --exec 'npm run build && node dist/index.js'",
     "lint": "eslint",
-    "test": "tsx --test src/test/*.ts"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
