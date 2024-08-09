@@ -5,4 +5,4 @@ deploy-contracts:
 	cd contracts && make deploy-all
 
 start-app:
-	cd app && npm i && npm start
+	cd app && npm i && npm run build && npm start
