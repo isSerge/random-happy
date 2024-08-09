@@ -1,16 +1,14 @@
-# Node.js project template
+# Node.js app to interact with oracle contracts
 
-Minimal template for a Node.js project, which includes:
+## Features:
 
-- [Typescript](https://www.typescriptlang.org/)
-- [ESLint](https://eslint.org/)
-- [Tap](https://node-tap.org/) testing framework
-- [Pino](https://getpino.io/#/) logger
-- Basic Github actions [workflow](.github/workflows/default.yml)
+- **Drand Randomness Integration**: Fetches randomness from the Drand network and submits it to the `DrandOracle` contract.
+- **Sequencer Randomness Oracle**: Generates random values, commits them, and reveals them according to a specified schedule.
+- **Transaction Management**: Handles the submission and retry logic of transactions, ensuring they are processed in the correct order and timing.
 
 ## Available scripts
 
 - `start` - start application
+- `dev` - start dev server
 - `build` - transpile TypeScript to ES6
-- `test` - run tests
 - `lint` - check codebase using ESLint
