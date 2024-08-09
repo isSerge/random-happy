@@ -2,6 +2,11 @@ import { HttpCachingChain, HttpChainClient, fetchBeacon, watch } from 'drand-cli
 import { config } from './config';
 import { logger } from './logger';
 
+/**
+ * Fetches randomness from the drand service and yields new randomness beacons.
+ * @param abortController The abort controller to cancel the fetch request
+ * @returns An async generator that yields randomness beacons
+ */
 export async function* fetchDrandRandomness(abortController: AbortController) {
   const options = {
     disableBeaconVerification: false,

@@ -6,6 +6,12 @@ import { logger } from '../logger';
 import { TransactionData, TransactionWithDeadline } from '../types';
 import abi from './sequencerOracleAbi.json';
 
+/**
+ * Creates post commitement and reveal transaction objects for the sequencer randomness oracle contract with the given random data.
+ * @param client The client to interact with the chain
+ * @param randomData simulated random data
+ * @returns array of transaction data and deadlines for postCommitment and revealValue transactions
+ */
 export async function createSequencerTxData(client: PublicClient, randomData: bigint): Promise<[TransactionWithDeadline, TransactionWithDeadline]> {
   const address = config.SEQUENCER_ORACLE_ADDRESS as `0x${string}`;
 
@@ -60,12 +66,12 @@ export async function createSequencerTxData(client: PublicClient, randomData: bi
   return [
     {
       txData: postTxData,
-      deadline: postDeadline, // Set deadline to futureTimestamp
+      deadline: postDeadline,
     },
     {
       txData: revealTxData,
-      deadline: revealDeadline, // Set deadline to futureTimestamp + timeout
-      notBefore: futureTimestamp, // Ensure this is only processed after futureTimestamp
+      deadline: revealDeadline,
+      notBefore: futureTimestamp, // Ensure this is only processed after futureTimestamp, otherwise it will revert due to reveal too early error
     },
   ];
 }

@@ -10,8 +10,11 @@ import { createSequencerTxData } from './oracles/sequencerOracle';
 import { fetchDrandRandomness } from './drand';
 import { TransactionManager } from './transaction';
 
-const SEQUENCER_COMMITMENT_INTERVAL = 2000; // in milliseconds
+const SEQUENCER_COMMITMENT_INTERVAL = 2000;
 
+/** 
+ * This function generates a random value using a sha256 hash of a random string and returns it as a bigint.
+*/
 function generateRandomValue(): bigint {
   return BigInt('0x' + createHash('sha256').update(Math.random().toString()).digest('hex'));
 }
@@ -37,7 +40,9 @@ export async function main() {
   // Initialize the transaction manager, which will start processing the queue
   await txManager.initialize();
 
-  // Function to handle drand randomness
+  /**
+   * This function fetches randomness from drand and adds every new randomness value to the transaction manager.
+   */
   const handleDrandRandomness = async () => {
     // Start fetching randomness from drand
     const abortController = new AbortController();
@@ -49,7 +54,9 @@ export async function main() {
     }
   };
 
-  // Function to handle sequencer commitments
+  /**
+   * This function generates a random value, creates sequencer commitments and adds them to the transaction manager.
+   */
   const handleSequencerCommitments = async () => {
     while (true) {
       const randomValue = generateRandomValue();
@@ -59,7 +66,7 @@ export async function main() {
       await txManager.addTransaction(postTxData);
       await txManager.addTransaction(revealTxData);
 
-      // Wait for 2 seconds before generating the next commitment
+      // Wait before generating the next commitment
       await new Promise((resolve) => setTimeout(resolve, SEQUENCER_COMMITMENT_INTERVAL));
     }
   };

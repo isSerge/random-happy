@@ -7,6 +7,12 @@ import { TransactionData, TransactionWithDeadline } from '../types';
 
 import abi from './drandOracleAbi.json';
 
+/** 
+ * Creates transaction object for the drand oracle contract with the given randomness beacon.
+ * @param client The client to interact with the chain
+ * @param beacon The randomness beacon object
+ * @returns The transaction data and deadline
+*/
 export async function createDrandTxData(client: PublicClient, beacon: RandomnessBeacon): Promise<TransactionWithDeadline> {
   const block = await client.getBlock();
   const blockTimestamp = BigInt(block.timestamp);

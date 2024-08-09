@@ -24,6 +24,19 @@ interface TrackedTransaction extends QueuedTransaction {
   // TODO: include gas limit - currently blocked by timeout error
 }
 
+/** 
+ * This class manages transactions, including queuing, processing, and tracking transactions.
+ * It also includes methods to speed up or drop transactions based on certain conditions.
+ * It uses a TinyQueue for the main queue and a separate array for delayed transactions.
+ * It also includes a monitorPendingTxs method to check the status of pending transactions.
+ * @param account The account to use for signing transactions
+ * @param client The client to interact with the chain
+ * @param queueInterval The interval to check the queue for transactions
+ * @param maxRetries The maximum number of retries for a transaction
+ * @param batchSize The number of transactions to process in each batch
+ * @param monitorPendingTxsInterval The interval to check the status of pending transactions
+ * @returns A new TransactionManager instance
+*/
 export class TransactionManager {
   private account: PrivateKeyAccount;
   private client: PublicClient & WalletClient;
@@ -57,6 +70,9 @@ export class TransactionManager {
     this.delayedQueue = [];
   }
 
+  /**
+   * Initializes the TransactionManager by starting the processQueue and monitorPendingTxs methods.
+   */
   public async initialize() {
     // Initialize queue: using dynamic import since it's a CommonJS module
     const { default: TinyQueue } = await import('tinyqueue');
@@ -68,6 +84,11 @@ export class TransactionManager {
     this.monitorPendingTxs();
   }
 
+  /**
+   * Adds a transaction to the queue with the given deadline.
+   * @param transactionWithDeadline Transaction data to add to the queue with the deadline and notBefore values
+   * @returns A promise that resolves when the transaction is added to the queue
+   */
   public async addTransaction({ txData, deadline, notBefore }: TransactionWithDeadline) {
     await this.queueMutex.runExclusive(() => {
       this.queue.push({ txData, deadline, retries: 0, notBefore });
@@ -76,11 +97,19 @@ export class TransactionManager {
     });
   }
 
+  /**
+   * Gets the current block timestamp.
+   * @returns The current block timestamp as a bigint
+   */
   private async getCurrentBlockTimestamp(): Promise<bigint> {
     const block = await this.client.getBlock();
     return BigInt(block.timestamp);
   }
 
+  /**
+   * Processes the queue by checking for transactions to process, requeueing delayed transactions, and removing expired transactions.
+   * @returns A promise that resolves when the queue is processed
+   */
   private async processQueue() {
     while (true) {
       if (this.queue.length === 0 && this.delayedQueue.length === 0) {
@@ -110,6 +139,12 @@ export class TransactionManager {
     }
   }
 
+  /**
+   * Requeues delayed transactions that are ready to be processed.
+   * @param delayedQueue The queue of delayed transactions
+   * @param currentBlockTimestamp The current block timestamp
+   * @returns A promise that resolves when the delayed transactions are requeued
+   */
   private async requeueDelayedTransactions(delayedQueue: QueuedTransaction[], currentBlockTimestamp: bigint) {
     for (let i = 0; i < delayedQueue.length; i++) {
       const delayedTx = delayedQueue[i];
@@ -122,6 +157,10 @@ export class TransactionManager {
     }
   }
 
+  /**
+   * Removes expired transactions from the queue.
+   * @param currentBlockTimestamp The current block timestamp
+   */
   private removeExpiredTransactions(currentBlockTimestamp: bigint) {
     while (this.queue.length > 0 && this.queue.peek().deadline <= currentBlockTimestamp) {
       const { txData } = this.queue.pop();
@@ -129,6 +168,11 @@ export class TransactionManager {
     }
   }
 
+  /**
+   * Gets the transactions to process from the queue.
+   * @param currentBlockTimestamp The current block timestamp
+   * @returns An array of transactions to process
+   */
   private async getTransactionsToProcess(currentBlockTimestamp: bigint): Promise<QueuedTransaction[]> {
     const transactionsToProcess: QueuedTransaction[] = [];
     await this.queueMutex.runExclusive(() => {
@@ -150,9 +194,15 @@ export class TransactionManager {
         // }
       }
     });
+
     return transactionsToProcess;
   }
 
+  /**
+   * Processes the transactions in the queue by submitting them to the chain.
+   * @param transactionsToProcess The transactions to process
+   * @returns A promise that resolves when the transactions are processed
+   */
   private async processTransactions(transactionsToProcess: QueuedTransaction[]) {
     await Promise.allSettled(
       transactionsToProcess.map(async ({ txData, deadline, retries }) => {
@@ -186,6 +236,11 @@ export class TransactionManager {
     );
   }
 
+
+  /**
+   * Handles transaction errors by logging the error message.
+   * @param error 
+  */
   // TODO: handle specific transaction errors
   private async handleTxError(error: unknown) {
     if (error instanceof Error) {
@@ -195,15 +250,24 @@ export class TransactionManager {
     }
   }
 
+  /**
+   * Handles transaction reverts.
+   * @param txHash The hash of the reverted transaction
+   */
   // TODO: handle specific revert reasons
   private async handleTxRevert(txHash: `0x${string}`) {
     logger.error(`TransactionManager.handleTxRevert: Transaction ${txHash} reverted`);
   }
 
+  /**
+   * Estimates gas for a transaction.
+   * @param tx The transaction data
+   * @returns The estimated gas limit
+   */
+  // TODO: investigate why this is failing with timeout error
   private async estimateGasWithFallback(__tx: TransactionData) {
     const defaultGasLimit = BigInt(1000000);
 
-    // TODO: investigate why this is failing with timeout error
     // try {
     //   // Estimate gas
     //   const gasEstimate = await this.client.estimateGas({
@@ -229,6 +293,11 @@ export class TransactionManager {
     return defaultGasLimit;
   }
 
+  /**
+   * Submits a transaction to the chain.
+   * @param txData The transaction data
+   * @returns A promise that resolves when the transaction is submitted
+   */
   private async submitTransaction(txData: TransactionData) {
     logger.info(`TransactionManager.submitTransaction: Submitting transaction: ${txData.functionName} on contract: ${txData.address} `);
 
@@ -283,6 +352,10 @@ export class TransactionManager {
     };
   }
 
+  /**
+   * Speeds up a transaction by increasing the gas price.
+   * @param txHash The hash of the transaction to speed up
+   */
   private async speedUpTransaction(txHash: `0x${string}`) {
     await this.trackedTransactionsMutex.runExclusive(async () => {
       const trackedTx = this.trackedTransactions.get(txHash);
@@ -307,6 +380,11 @@ export class TransactionManager {
     });
   }
 
+  /**
+   * Drops a transaction from the queue.
+   * @param txHash The hash of the transaction to drop
+   * @returns A promise that resolves when the transaction is dropped
+   */
   // TODO: should replace the transaction with a new one with higher gas price
   private async dropTransaction(txHash: `0x${string}`) {
     await this.trackedTransactionsMutex.runExclusive(() => {
@@ -320,6 +398,10 @@ export class TransactionManager {
     logger.info(`TransactionManager.dropTransaction: Transaction with hash ${txHash} marked for removal`);
   }
 
+  /**
+   * Monitors pending transactions to check their status and take action if necessary.
+   * This method is run in a loop with a delay between each iteration.
+   */
   // TODO: implement logic to check if transaction should be sped up or dropped
   // TODO: do more testing, currently pendingTxHashes is always empty - probably need more transactions in the queue
   private async monitorPendingTxs() {
