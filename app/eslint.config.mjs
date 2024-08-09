@@ -1,6 +1,5 @@
 import eslintPlugin from "eslint-plugin-eslint-plugin";
 import typescriptEslint from "@typescript-eslint/eslint-plugin";
-import prettier from "eslint-plugin-prettier";
 import globals from "globals";
 import tsParser from "@typescript-eslint/parser";
 import path from "node:path";
@@ -31,7 +30,6 @@ export default [{
     plugins: {
         "eslint-plugin": eslintPlugin,
         "@typescript-eslint": typescriptEslint,
-        prettier,
     },
 
     languageOptions: {
@@ -48,8 +46,6 @@ export default [{
     },
 
     rules: {
-        "prettier/prettier": "error",
-
         "@typescript-eslint/prefer-readonly": [1, {
             onlyInlineLambdas: true,
         }],
