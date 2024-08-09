@@ -1,7 +1,9 @@
 export interface TransactionData {
   address: `0x${string}`,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   abi: any,
   functionName: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   args: any[],
 }
 

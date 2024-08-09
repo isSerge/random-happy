@@ -38,20 +38,21 @@ interface TrackedTransaction extends QueuedTransaction {
  * @returns A new TransactionManager instance
 */
 export class TransactionManager {
-  private account: PrivateKeyAccount;
-  private client: PublicClient & WalletClient;
+  private readonly account: PrivateKeyAccount;
+  private readonly client: PublicClient & WalletClient;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private queue: any; // should be TinyQueue<QueuedTransaction>, but we're using dynamic import because it's a CommonJS module
-  private queueInterval: number;
-  private maxRetries: number;
-  private queueMutex: Mutex;
-  private batchSize: number;
-  private trackedTransactions: Map<`0x${string}`, TrackedTransaction>;
-  private trackedTransactionsMutex: Mutex;
-  private removalSet: Set<`0x${string}`>; // Set of transactions to remove from the queue
-  private removalSetMutex: Mutex;
-  private monitorPendingTxsInterval: number;
+  private readonly queueInterval: number;
+  private readonly maxRetries: number;
+  private readonly queueMutex: Mutex;
+  private readonly batchSize: number;
+  private readonly trackedTransactions: Map<`0x${string}`, TrackedTransaction>;
+  private readonly trackedTransactionsMutex: Mutex;
+  private readonly removalSet: Set<`0x${string}`>; // Set of transactions to remove from the queue
+  private readonly removalSetMutex: Mutex;
+  private readonly monitorPendingTxsInterval: number;
   // TODO: using array for simplicity, probably should use a priority queue (with Mutex?) or better queue for both main and delayed transactions
-  private delayedQueue: QueuedTransaction[]; // Queue for transactions that are not ready to be processed yet (i.e. revealValue transactions)
+  private readonly delayedQueue: QueuedTransaction[]; // Queue for transactions that are not ready to be processed yet (i.e. revealValue transactions)
 
   constructor(params: TransactionManagerParams) {
     this.account = params.account;
@@ -265,6 +266,7 @@ export class TransactionManager {
    * @returns The estimated gas limit
    */
   // TODO: investigate why this is failing with timeout error
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private async estimateGasWithFallback(__tx: TransactionData) {
     const defaultGasLimit = BigInt(1000000);
 
