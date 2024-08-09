@@ -41,6 +41,35 @@ contract SequencerRandomOracleTest is Test {
         assertEq(sequencerOracle.getValue(T), randomValue);
     }
 
+    function testRevealOutOfOrder() public warpTimestamp {
+        uint256 T1 = block.timestamp + 20;
+        uint256 T2 = block.timestamp + 30;
+        bytes32 randomValue1 = keccak256("test1");
+        bytes32 randomValue2 = keccak256("test2");
+
+        bytes32 commitment1 = keccak256(abi.encode(randomValue1));
+        bytes32 commitment2 = keccak256(abi.encode(randomValue2));
+
+        sequencerOracle.postCommitment(T1, commitment1);
+        sequencerOracle.postCommitment(T2, commitment2);
+
+        // Advance the timestamp to allow revealing
+        vm.warp(T1);
+
+        // Reveal the first value
+        sequencerOracle.revealValue(T1, randomValue1);
+
+        // Try to reveal the second value with a lower or same timestamp as the last revealed timestamp
+        vm.expectRevert("Reveal out of order");
+        sequencerOracle.revealValue(T1, randomValue1); // Revealing again with T1 should fail
+
+        // Now reveal the second value with the correct timestamp
+        vm.warp(T2);
+        sequencerOracle.revealValue(T2, randomValue2);
+
+        assertEq(sequencerOracle.getValue(T2), randomValue2);
+    }
+
     function testWillBeAvailable() public warpTimestamp {
         uint256 T = block.timestamp + 1;
         assertTrue(sequencerOracle.willBeAvailable(T));

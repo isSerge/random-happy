@@ -8,6 +8,7 @@ contract SequencerRandomOracle {
     // Mapping from timestamp T to commitments and revealed values
     mapping(uint256 => bytes32) public commitments;
     mapping(uint256 => bytes32) public revealedValues;
+    uint256 public lastRevealedTimestamp;
 
     event CommitmentSubmitted(uint256 indexed timestamp, bytes32 indexed commitment);
     event ValueRevealed(uint256 indexed timestamp, bytes32 indexed value);
@@ -38,10 +39,12 @@ contract SequencerRandomOracle {
 
     // Function to reveal the committed value for a specific timestamp T
     function revealValue(uint256 T, bytes32 value) external {
+        require(T > lastRevealedTimestamp, "Reveal out of order");
         require(block.timestamp >= T, "Too early to reveal");
         require(block.timestamp <= T + timeout, "Reveal too late");
         require(commitments[T] == keccak256(abi.encode(value)), "Invalid reveal");
         revealedValues[T] = value;
+        lastRevealedTimestamp = T;
 
         emit ValueRevealed(T, value);
     }
