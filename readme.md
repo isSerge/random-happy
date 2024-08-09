@@ -81,3 +81,33 @@ This should output randomness values for each block:
 [2024-08-09 06:28:22] INFO: timestamp: 1723184897
 [2024-08-09 06:28:22] INFO: drand(T): 0x6f1ded684beb1c7a4541e456d4c94d262aec4020503cbcea191b221b3e4f0b2a
 ```
+
+## Current issues and potential improvements:
+
+### Smart contracts:
+
+1. Contracts should use `onlyOwner` modifier for methods that change state (i.e.
+   `setValue`, `postCommitment`)
+2. Implement integration tests (currently only unit tests implemented)
+3. `RandomnessOracle` should emit events
+
+### Node.js app:
+
+1. Currently no unit and integration tests implemented
+2. Implement robust gas management: blocked by an issue related to gas limit
+   estimate
+3. Better transaction status monitoring including transaction speed up and
+   transaction drop (methods are added, but lack implementation)
+4. Handle transaction errors (currently only does logging)
+5. Handle specific reverts (currently only does logging)
+6. Optimal strategy for transaction simulation (currently simulates all
+   transaction before being submitted)
+7. Better nonce management: currently uses `nonceManager` from `viem`
+8. Integrate `RandomnessOracle`
+9. Handle case when Drand randomness is not available (i.e. Drand is not
+   responsing)
+10. Demo script (Monitoring oracles): currently only includes Drand oracle and
+    there is an issue when randomness value is not available, which requires
+    more in-depth investigation
+11. Consider using better queue or use own implementation: Currently using
+    `TinyQueue`, which is a CommonJS module
