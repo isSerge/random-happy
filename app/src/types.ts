@@ -4,3 +4,9 @@ export interface TransactionData {
   functionName: string,
   args: any[],
 }
+
+export interface TransactionWithDeadline {
+  txData: TransactionData,
+  deadline: bigint,
+  notBefore?: bigint; // Optional field to specify the earliest time the transaction can be included
+}

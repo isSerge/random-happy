@@ -1,7 +1,7 @@
 import { PrivateKeyAccount, PublicClient, WalletClient } from 'viem';
 import { Mutex } from 'async-mutex';
 
-import { TransactionData } from './types';
+import { TransactionData, TransactionWithDeadline } from './types';
 import { logger } from './logger';
 
 interface TransactionManagerParams {
@@ -13,9 +13,7 @@ interface TransactionManagerParams {
   monitorPendingTxsInterval?: number;
 }
 
-interface QueuedTransaction {
-  txData: TransactionData;
-  deadline: bigint;
+interface QueuedTransaction extends TransactionWithDeadline {
   retries: number;
 }
 
@@ -107,14 +105,17 @@ export class TransactionManager {
       // 2. Pop transactions from the queue until the batch size is reached
       await this.queueMutex.runExclusive(() => {
         while (this.queue.length > 0 && transactionsToProcess.length < this.batchSize) {
-          const nextTx = this.queue.pop();
+          const nextTx: QueuedTransaction = this.queue.pop();
 
-          if (!this.removalSet.has(nextTx.txData.hash)) {
-            transactionsToProcess.push(nextTx);
-          } else {
-            this.removalSet.delete(nextTx.txData.hash);
-            logger.info(`TransactionManager.processQueue: Skipping removed transaction: ${nextTx.txData.hash}`);
-          }
+          transactionsToProcess.push(nextTx);
+
+          // TODO: implement removalSet logic
+          // if (!this.removalSet.has(nextTx.txData.hash)) {
+          //   transactionsToProcess.push(nextTx);
+          // } else {
+          //   this.removalSet.delete(nextTx.txData.hash);
+          //   logger.info(`TransactionManager.processQueue: Skipping removed transaction: ${nextTx.txData.hash}`);
+          // }
         }
       });
 

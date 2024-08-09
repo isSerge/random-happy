@@ -1,7 +1,6 @@
-import { createTestClient, http, publicActions, walletActions, keccak256 } from 'viem';
+import { createTestClient, http, publicActions, walletActions } from 'viem';
 import { foundry } from 'viem/chains';
 import { privateKeyToAccount, nonceManager } from 'viem/accounts';
-import { toHex } from 'viem/utils';
 import { createHash } from 'crypto';
 
 import { config } from './config';
@@ -39,6 +38,7 @@ export async function main() {
   await txManager.initialize();
 
   // Function to handle drand randomness
+  // @ts-ignore
   const handleDrandRandomness = async () => {
     // Start fetching randomness from drand
     const abortController = new AbortController();
@@ -53,11 +53,12 @@ export async function main() {
   // Function to handle sequencer commitments
   const handleSequencerCommitments = async () => {
     while (true) {
-      const sequencerRandomValue = generateRandomValue();
-      const commitment = keccak256(toHex(sequencerRandomValue));
-      const sequencerTxData = await createSequencerTxData(client, commitment);
+      const randomValue = generateRandomValue();
 
-      await txManager.addTransaction(sequencerTxData);
+      const [postTxData] = await createSequencerTxData(client, randomValue);
+
+      await txManager.addTransaction(postTxData);
+      // await txManager.addTransaction(revealTxData);
 
       // Wait for 2 seconds before generating the next commitment
       await new Promise((resolve) => setTimeout(resolve, SEQUENCER_COMMITMENT_INTERVAL));
@@ -66,7 +67,7 @@ export async function main() {
 
   // Start handling drand randomness and sequencer commitments concurrently
   await Promise.all([
-    handleDrandRandomness(),
+    // handleDrandRandomness(),
     handleSequencerCommitments(),
   ]);
 }

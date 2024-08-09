@@ -3,11 +3,11 @@ import { RandomnessBeacon } from 'drand-client';
 
 import { config } from '../config';
 import { logger } from '../logger';
-import { TransactionData } from '../types';
+import { TransactionData, TransactionWithDeadline } from '../types';
 
 import abi from './drandOracleAbi.json';
 
-export async function createDrandTxData(client: PublicClient, beacon: RandomnessBeacon) {
+export async function createDrandTxData(client: PublicClient, beacon: RandomnessBeacon): Promise<TransactionWithDeadline> {
   const block = await client.getBlock();
   const blockTimestamp = BigInt(block.timestamp);
   const randomness = `0x${beacon.randomness}`;

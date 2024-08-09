@@ -1,24 +1,26 @@
-import { PublicClient } from 'viem';
+import { PublicClient, keccak256 } from 'viem';
+import { toHex } from 'viem/utils';
 
 import { config } from '../config';
 import { logger } from '../logger';
-import { TransactionData } from '../types';
+import { TransactionData, TransactionWithDeadline } from '../types';
 import abi from './sequencerOracleAbi.json';
 
-export async function createSequencerTxData(client: PublicClient, commitment: string): Promise<{ txData: TransactionData, deadline: bigint }> {
+export async function createSequencerTxData(client: PublicClient, randomData: bigint): Promise<[TransactionWithDeadline, TransactionWithDeadline]> {
   const address = config.SEQUENCER_ORACLE_ADDRESS as `0x${string}`;
+
   // Fetch the current block timestamp
   const block = await client.getBlock();
   const blockTimestamp = BigInt(block.timestamp);
 
-  // Fetch the timeout value from the contract
+  const commitment = keccak256(toHex(randomData));
+
+  // Fetch the timeout and precommitDelay values from the contract
   const timeout = await client.readContract({
     address,
     abi,
     functionName: 'getTimeout',
   });
-
-  // Fetch the precommitDelay value from the contract
   const precommitDelay = await client.readContract({
     address,
     abi,
@@ -33,20 +35,37 @@ export async function createSequencerTxData(client: PublicClient, commitment: st
   // Calculate the future timestamp
   const futureTimestamp = blockTimestamp + precommitDelayBigInt + buffer;
 
+  // Calculate the deadline for the postCommitment transaction (right at futureTimestamp)
+  const postDeadline = futureTimestamp;
+
+  // Calculate the deadline for the revealValue transaction
+  const revealDeadline = futureTimestamp + timeoutBigInt;
+
   logger.info(`Creating sequencer commitment transaction: ${commitment} for future timestamp: ${futureTimestamp}`);
 
-  // Calculate the deadline
-  const deadline = futureTimestamp + timeoutBigInt;
-
-  const txData: TransactionData = {
+  const postTxData: TransactionData = {
     address,
     abi,
     functionName: 'postCommitment',
     args: [futureTimestamp, commitment],
   };
 
-  return {
-    txData,
-    deadline,
+  const revealTxData: TransactionData = {
+    address,
+    abi,
+    functionName: 'revealValue',
+    args: [futureTimestamp, toHex(randomData)],
   };
+
+  return [
+    {
+      txData: postTxData,
+      deadline: postDeadline, // Set deadline to futureTimestamp
+    },
+    {
+      txData: revealTxData,
+      deadline: revealDeadline, // Set deadline to futureTimestamp + timeout
+      notBefore: futureTimestamp, // Ensure this is only processed after futureTimestamp
+    },
+  ];
 }
